@@ -1,0 +1,37 @@
+/* The ground panel (ground.js). */
+#paneGround .gstatus { margin-bottom: 4px; }
+#paneGround .row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 4px 0; }
+#paneGround .grow { flex: 1; }
+.glayers { border: 1px solid var(--line); margin: 2px 0 6px; max-height: 220px; overflow: auto; }
+.glayer { display: flex; align-items: center; gap: 6px; padding: 2px 4px; cursor: pointer; border-bottom: 1px solid var(--line); }
+.glayer:last-child { border-bottom: 0; }
+.glayer.on { background: #24364d; }
+.glayer .gname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.glayer button { padding: 0 5px; min-width: 0; }
+.gsw { display: inline-block; width: 22px; height: 22px; border: 1px solid var(--line); vertical-align: middle; overflow: hidden; flex: none; }
+.gsw img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gprops { border-left: 2px solid var(--line); padding-left: 6px; margin: 4px 0 8px; }
+.gprops summary { cursor: pointer; color: var(--dim); }
+.gf { display: flex; align-items: center; gap: 6px; margin: 3px 0; font-size: 12px; }
+.gf input[type=number], .gf input[type=text] { width: 110px; }
+.gf input[type=range] { flex: 1; }
+.gcheck input { order: 2; }
+.gtexbtn { display: inline-flex; align-items: center; gap: 4px; max-width: 220px; overflow: hidden; white-space: nowrap; }
+.gbrush { border: 1px solid var(--accent); padding: 4px 6px; margin: 4px 0 8px; }
+.gdlg { width: min(900px, 92vw); background: var(--panel); color: var(--text); border: 1px solid var(--line); }
+.gtabs { display: flex; gap: 4px; margin-bottom: 6px; }
+.ggrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 6px; max-height: 60vh; overflow: auto; }
+.gtex { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px; font-size: 11px; overflow: hidden; }
+.gtex img { width: 92px; height: 92px; object-fit: cover; background: #000; }
+.gtex span { max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gcut { display: block; max-width: 100%; cursor: crosshair; background: #000; }
+/* The void panel (void.js). */
+#paneVoid .vhead { display: flex; align-items: center; gap: 4px; margin: 6px 0 2px; font-weight: 600; }
+#paneVoid .vhead.small { font-weight: normal; font-size: 12px; }
+#paneVoid .vsec { border-top: 1px solid var(--line); margin-top: 6px; }
+#paneVoid .vfield { margin: 2px 0 4px 18px; }
+#paneVoid .vfield .hint { margin: 0 0 2px; }
+#paneVoid .vcol { display: inline-flex; align-items: center; gap: 4px; }
+#paneVoid .vcol input[type=text] { width: 120px; }
+#paneVoid .vf { font-size: 11px; padding: 2px 6px; margin: 2px 0; border-left: 3px solid var(--err); background: #22262e; }
+#paneVoid .vf.warning { border-color: var(--warn); }

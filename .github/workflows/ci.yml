@@ -1,0 +1,120 @@
+# Checks the page on every push and pull request: the JavaScript parses, editor.json and the templates' map.json
+# are valid JSON, and the players' shortcut has CRLF line ends.
+# A pushed tag v<version> (equal to editor.json's version) also builds Dawngate-Map-Editor-<version>.zip with the
+# layout the players unpack into the release folder (DEVELOPING.md *Continuous integration and releases*) and
+# attaches it to the tag's GitHub release.
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: JavaScript parses
+        run: |
+          set -euo pipefail
+          node --version
+          n=0
+          for f in web/*.js; do node --check "$f"; n=$((n + 1)); done
+          if [ "$n" -eq 0 ]; then echo "::error::no web/*.js"; exit 1; fi
+          echo "$n scripts parse"
+
+      - name: JSON is valid
+        run: |
+          set -euo pipefail
+          python3 - <<'EOF'
+          import glob, json, os, re, sys
+          bad = 0
+          ed = json.load(open('editor.json', encoding='utf-8'))
+          if set(ed) != {'version', 'api'} or not re.fullmatch(r'\d+\.\d+\.\d+', str(ed.get('version'))) \
+                  or type(ed.get('api')) is not int or ed['api'] < 1:
+              print('::error::editor.json must be {"version": "<major>.<minor>.<patch>", "api": <n >= 1>}: %r' % ed)
+              bad = 1
+          maps = sorted(glob.glob('templates/*/map.json'))
+          if not maps:
+              print('::error::no templates/*/map.json')
+              bad = 1
+          for p in maps:
+              try:
+                  m = json.load(open(p, encoding='utf-8'))
+              except ValueError as e:
+                  print('::error file=%s::%s' % (p, e))
+                  bad = 1
+                  continue
+              folder = os.path.basename(os.path.dirname(p))
+              if m.get('name') != folder or m.get('format') != 1:
+                  print('::error file=%s::the template\'s name must be its folder\'s (%s) and its format 1' % (p, folder))
+                  bad = 1
+          print('editor.json %s, %d templates' % (ed, len(maps)))
+          sys.exit(bad)
+          EOF
+
+      - name: The shortcut has CRLF line ends
+        run: |
+          set -euo pipefail
+          python3 - <<'EOF'
+          import sys
+          data = open('Map Editor.cmd', 'rb').read()
+          want = b'@echo off\r\nstart "" "%~dp0Start-Client.exe" --editor\r\n'
+          if data != want:
+              print('::error::Map Editor.cmd must be exactly %r (CRLF line ends: .gitattributes), not %r' % (want, data))
+              sys.exit(1)
+          print('Map Editor.cmd: CRLF, starts Start-Client.exe --editor')
+          EOF
+
+  release:
+    # a pushed tag v<version>: the zip, attached to the tag's release
+    needs: check
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: The zip
+        id: zip
+        run: |
+          set -euo pipefail
+          version=$(python3 -c "import json; print(json.load(open('editor.json'))['version'])")
+          tag="${GITHUB_REF#refs/tags/}"
+          if [ "$tag" != "v$version" ]; then echo "::error::the tag $tag is not v$version (editor.json)"; exit 1; fi
+          name="Dawngate-Map-Editor-$version"
+          stage="$RUNNER_TEMP/stage"
+          mkdir -p "$stage/editor/docs"
+          cp -r web/. "$stage/editor/"
+          cp -r templates "$stage/editor/templates"
+          cp editor.json README.md DEVELOPING.md LICENSE "$stage/editor/"
+          cp docs/making-maps.md "$stage/editor/docs/"
+          cp 'Map Editor.cmd' "$stage/"
+          find "$stage" -exec touch -d '1980-01-02 00:00:00' {} +
+          (cd "$stage" && find . -type f | LC_ALL=C sort | sed 's|^\./||' | zip -X -q "$GITHUB_WORKSPACE/$name.zip" -@)
+          unzip -l "$name.zip"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: The release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ steps.zip.outputs.name }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/}"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release upload "$tag" "$NAME.zip" --clobber
+          else
+            gh release create "$tag" "$NAME.zip" --verify-tag --title "Dawngate Map Editor $tag" \
+              --notes "Unpack $NAME.zip into the Dawngate Restoration release folder (beside Start-Client.exe), then start Map Editor.cmd (README.md)."
+          fi

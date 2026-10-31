@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Map editor</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="ground.css">
+</head>
+<body>
+<header id="top">
+  <span class="brand">Map editor</span>
+  <label>Map <select id="mapSelect"><option value="">(open a map)</option></select></label>
+  <button id="btnNew" title="A new package from a template map">New from template...</button>
+  <span class="sep"></span>
+  <button id="btnUndo" title="Undo (Ctrl+Z)">Undo</button>
+  <button id="btnRedo" title="Redo (Ctrl+Y)">Redo</button>
+  <span class="sep"></span>
+  <button id="btnSave" title="Save map.json (Ctrl+S); unchanged values keep their bytes">Save</button>
+  <button id="btnBuild" title="mapc build into the output folder">Build</button>
+  <label class="small" title="Leave the cooked PhysX mesh out (the archive is for inspection only)"><input type="checkbox" id="optNoMesh"> no mesh</label>
+  <label class="small" title="Write the archive into the -install copy's game\Data instead of the output folder"><input type="checkbox" id="optInstall"> into the copy</label>
+  <button id="btnTest" disabled>Test</button>
+  <span class="grow"></span>
+  <span id="checkState" class="badge">no map</span>
+  <span id="dirty" class="badge hidden">unsaved</span>
+</header>
+
+<aside id="left">
+  <section class="pane" id="paneTools">
+    <h2>Tools</h2>
+    <div class="tools">
+      <button data-tool="select" class="on" title="Select and drag (Esc clears). Shift+click adds, Ctrl+click adds or removes a prop; drag a box on empty ground (or with Shift or Ctrl anywhere) to select the props it touches">Select</button>
+      <button data-tool="shape" title="Draw a new terrain shape">Shape</button>
+      <button data-tool="well" title="Place a well (team 1's half)">Well</button>
+      <button data-tool="camp" title="Place a camp (its noun in the inspector)">Camp</button>
+      <button data-tool="prop" title="Place the palette's prop with each click (P)">Prop</button>
+      <button data-tool="scatter" title="Scatter the palette's props along the walls in a polygon you draw">Scatter</button>
+    </div>
+    <div id="shapeOpts">
+      <div class="row">
+        <label><input type="radio" name="stype" value="wall" checked> wall</label>
+        <label><input type="radio" name="stype" value="bush"> bush</label>
+        <label><input type="radio" name="stype" value="open"> open</label>
+        <label><input type="radio" name="stype" value="chasm"> chasm</label>
+        <label><input type="radio" name="stype" value="island" title="ground only NPCs walk: a well on it is out of the players' reach"> island</label>
+      </div>
+      <div class="row">
+        <label><input type="radio" name="sgeom" value="circle" checked> circle</label>
+        <label><input type="radio" name="sgeom" value="polygon"> polygon</label>
+        <label><input type="radio" name="sgeom" value="path"> path</label>
+      </div>
+    </div>
+    <p class="hint" id="toolHint">Circle: press at the centre, drag out the radius.</p>
+    <label class="small"><input type="checkbox" id="optSnap"> snap to 1 m (or hold Shift)</label>
+    <label class="small" title="Dragging a lane knot, a well or a camp also moves the shapes joined to it: a clearing centred on it, the ends of the paths and the corners that meet it, and the shapes beside the lane next to a knot (they follow by how near the knot they are)"><input type="checkbox" id="optJoined" checked> drag joined shapes along</label>
+  </section>
+  <section class="pane" id="paneLayers">
+    <h2>Layers</h2>
+    <div id="bgList"><p class="hint">The derived layers appear after the first check.</p></div>
+    <label class="small">opacity <input type="range" id="bgAlpha" min="0" max="100" value="80"></label>
+    <div id="overlayList"></div>
+  </section>
+</aside>
+
+<main id="center">
+  <nav id="viewTabs"></nav>
+  <div id="views">
+    <div class="view on" id="view2d">
+      <canvas id="canvas" tabindex="0"></canvas>
+      <div id="coords"></div>
+    </div>
+  </div>
+</main>
+
+<aside id="right">
+  <section class="pane" id="paneInspector">
+    <h2>Inspector</h2>
+    <div id="inspector"><p class="hint">Open a map.</p></div>
+  </section>
+  <section class="pane" id="paneFindings">
+    <h2>Check <span id="checkSummary" class="small"></span></h2>
+    <div id="findings"></div>
+    <div id="stats" class="small"></div>
+    <div id="botsInfo" class="small"></div>
+  </section>
+</aside>
+
+<footer id="bottom"><div id="log"></div></footer>
+
+<dialog id="dlgNew">
+  <form method="dialog" id="formNew">
+    <h2>New map from a template</h2>
+    <label>Template <select name="template" id="newTemplate"></select></label>
+    <label>Name (CM_Word: the Level's and the folder's) <input name="name" required pattern="[A-Za-z0-9_]{1,80}" value="CM_"></label>
+    <label>Display name (1-13 characters) <input name="display" maxlength="13"></label>
+    <label>Tag (a-z, 0-9: the custom game's ~#tag) <input name="tag" pattern="[a-z0-9]+"></label>
+    <label>Prefix (at most 16) <input name="prefix" maxlength="16"></label>
+    <menu><button value="cancel" formnovalidate>Cancel</button> <button value="ok" id="newOk">Create</button></menu>
+  </form>
+</dialog>
+
+<pre id="selftest" class="hidden"></pre>
+<script src="app.js"></script>
+<script src="view3d.js"></script>
+<script src="props.js"></script>
+<script src="propsel.js"></script>
+<script src="ground.js"></script>
+<script src="void.js"></script>
+</body>
+</html>
