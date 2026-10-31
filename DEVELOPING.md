@@ -20,8 +20,8 @@ bake and export. So the page works only against a release's `Start-Client.exe`, 
    repository's layout), and `editor.json` the same way. `--editor-addr 127.0.0.1:<port>` serves on another port.
 3. Reload the browser after an edit: the files are read from disk on every request, nothing is embedded.
 
-`editor.json` (`{"version": "<semver>", "api": <n>}`) is read at the start: the backend refuses a page whose `api`
-it doesn't speak, with a console line and an error page that name both. Raise `api` only together with a backend
+`editor.json` (`{"version": "<semver>", "api": <n>}`) is read at the start: for a page whose `api` the backend
+doesn't speak it prints a console line and serves an error page instead of the page; both name the two versions. Raise `api` only together with a backend
 that speaks it; raise `version` for every release of the zip.
 
 ## The files
@@ -113,13 +113,15 @@ must come from the page itself.
 
 | Request | Body | Reply |
 |---|---|---|
-| `GET /api/state` | | the maps (`pkg`, `name`, `display`, `tag`, ...), the templates, `api`, `release`, the *Test* state |
-| `GET /api/map/{pkg}` | | `{pkg, text, sha256}` |
+| `GET /api/state` | | the maps (`pkg`, `name`, `display`, `tag`, `delivered`, ...), the `templates` (the same), `api`, `release`, `page` (the manifest), `pageError`, `test: {enabled, reason}`, `view3d` |
+| `GET /api/map/{pkg}` | | `{pkg, text, sha256}`, and `delivered: {server, why}` for a package map delivery put there (read-only) |
 | `POST /api/check/{pkg}` | the document | `{rev, exit, report, preview, images, text, copyChecked, placed}`: the check of the draft; `preview` when the structural rules pass, `text` the merged draft, `placed` the props' markers (`mapc props`) |
-| `POST /api/save/{pkg}?base=<sha256>[&force=1]` | the document | `{ok, written, sha256, text, pictures, removed}`; 409 when the file changed on disk since it was opened |
-| `POST /api/new` | `{template, name, display, tag, prefix}` | `{ok, pkg}`; 409 when it exists |
+| `POST /api/save/{pkg}?base=<sha256>[&force=1]` | the document | `{ok, written, sha256, text, pictures, removed}`; 409 when the file changed on disk since it was opened, 403 for a delivered package |
+| `POST /api/new` | `{template, source, name, display, tag, prefix, keepAdded}` | `{ok, pkg}`; 409 when it exists. `source`: `maps` (default) or `templates`; `keepAdded` (*Save as my own copy*) also takes the pictures added to the template and not saved yet |
 | `POST /api/build/{pkg}` | | `{exit, result}` (`mapc build`'s JSON, into the editor's output folder) |
-| `POST /api/test/{pkg}`, `GET /api/test`, `POST /api/test-stop` | | *Test*: start, its phases and lines, Stop |
+| `POST /api/test/{pkg}` | options (a JSON object, optional; none are read today) | `{ok, test}`: *Test* of the saved package started (while its game runs, the game is closed and started again); 409 with `error` when it can't start: Test off (`/api/state`'s `test.reason`), a map without a name, a *Test* still starting, `Start-Server.exe` running in the folder, another game running |
+| `GET /api/test` | | `{test, tail}`: the last *Test* (`null` before the first): `name`, `pkg`, `map`, `phase` (`check`, `closing`, `server`, `setup`, `starting`, `playing`, then `done`), `running`, `started`, `stopped`, `error`; `tail` its last lines (the check, the setup's steps, the game's pid and exit) |
+| `POST /api/test-stop[?force=1]` | | `{ok}`: the game closed (`force`: at once), or a *Test* still starting starts none; 409 when none runs |
 | `GET /preview/{pkg}/{rev}/{file}.png` | | a layer picture of a check |
 | `GET /api/scene/{pkg}` | | `mapc scene` of the latest draft into the cache: `{ok, base, scene, result}` |
 | `GET /api/level-scene/{level}[?models=0]` | | `mapc scene` of a level of the game (`models=0`: the marker list only) |

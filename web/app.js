@@ -139,7 +139,11 @@ function updateDirty() {
   $('dirty').classList.toggle('hidden', !dirty);
   $('btnUndo').disabled = !S.undo.length;
   $('btnRedo').disabled = !S.redo.length;
-  $('btnSave').disabled = !S.doc;
+  $('btnSave').disabled = !S.doc || !!S.delivered;
+  $('btnSave').title = S.delivered ? S.delivered.why : 'Save map.json (Ctrl+S); unchanged values keep their bytes';
+  $('btnSaveOwn').classList.toggle('hidden', !S.doc || !S.delivered);
+  $('readOnly').classList.toggle('hidden', !S.doc || !S.delivered);
+  if (S.delivered) $('readOnly').title = S.delivered.why;
   $('btnBuild').disabled = !S.doc || !S.config || !S.config.copy;
   updateTestButton();
   return dirty;
@@ -1364,7 +1368,7 @@ async function loadState() {
   sel.value = S.pkg || cur;
   if (S.config.test && !S.config.test.enabled && !S.testNoted) { S.testNoted = true; log('Test is off: ' + S.config.test.reason); }
   if (!S.test) pollTest(true); // a Test started before the page was (re)loaded
-  $('optInstall').disabled = !S.config.install;
+  if (S.config.pageError) log(S.config.pageError, 'err'); // the backend serves an error page instead; a page kept open
   updateDirty();
 }
 
@@ -1374,7 +1378,9 @@ async function openMap(pkg) {
   if (res.error) { log(res.error, 'err'); return; }
   let doc;
   try { doc = JSON.parse(res.text); } catch (e) { log(pkg + '/map.json does not parse: ' + e.message, 'err'); return; }
+  if (res.delivered) log(res.delivered.why);
   Object.assign(S, { pkg, doc, base: res.sha256, savedJSON: JSON.stringify(doc), undo: [], redo: [], sel: null,
+    delivered: res.delivered || null,
     report: null, preview: null, images: null, img: null, imgFile: '', drawing: null, placed: null, placedFrom: null });
   $('bgList').dataset.rev = '';
   $('mapSelect').value = pkg;
@@ -1387,6 +1393,7 @@ async function openMap(pkg) {
 
 async function save(force) {
   if (!S.doc) return;
+  if (S.delivered) { log(S.delivered.why, 'err'); return; }
   const res = await api('POST', `/api/save/${S.pkg}?base=${S.base}${force ? '&force=1' : ''}`, snapshot());
   if (res._status === 409) {
     if (confirm(res.error + '. Overwrite it?')) return save(true);
@@ -1403,70 +1410,119 @@ async function save(force) {
 
 async function build() {
   if (!S.doc) return;
-  if (updateDirty()) { if (!confirm('Build reads the saved package. Save first?')) return; await save(); }
-  const target = $('optInstall').checked ? 'install' : 'out';
+  if (updateDirty() && !S.delivered) { if (!confirm('Build reads the saved package. Save first?')) return; await save(); }
   log(`building ${S.pkg}...`);
-  const res = await api('POST', `/api/build/${S.pkg}?target=${target}&mesh=${$('optNoMesh').checked ? 0 : 1}`);
+  const res = await api('POST', `/api/build/${S.pkg}?mesh=${$('optNoMesh').checked ? 0 : 1}`);
   const r = res.result;
   if (res.exit === 0 && r && r.ok) log(`built ${r.archive}: ${r.bytes} bytes, sha256 ${r.sha256.slice(0, 16)}${r.mesh ? '' : ' (no mesh)'}`, 'ok');
   else log('build: ' + ((r && r.error) || res.error || 'failed'), 'err');
 }
 
-// Test: a practice match on the saved map (test.go): the copies set up, then a play session of run_session.ps1; the
-// button turns into Stop while it runs, and the log follows its phases
+// Test: a practice match on the saved map, in the game of the Start-Client that serves the page (Start-Client.exe
+// --editor): mapc check of the saved package, the running game closed, This PC's server stopped (it starts again at
+// the login with this map), the game copy set up again, the game started with This PC preselected. Each Test starts
+// the game again on the saved version (the game reads its maps only at its start); Stop closes the game. The log
+// follows the phases and the Test's own lines (GET /api/test: test, tail).
+const TEST_PHASES = { check: 'checking the saved map', closing: 'closing the game', server: "stopping This PC's server",
+  setup: 'setting up the game copy', starting: 'starting the game', playing: 'the game runs', done: 'over' };
 async function testMap() {
-  if (S.test && S.test.running) return stopTest();
-  if (!S.doc) return;
-  if (updateDirty()) { if (!confirm('Test plays the saved package. Save first?')) return; if (!(await save())) return; }
+  if (!S.doc || !S.pkg) return;
+  if (updateDirty()) { if (!confirm('Test plays the saved map. Save first?')) return; if (!(await save())) return; }
+  const again = S.test && S.test.running;
   const res = await api('POST', '/api/test/' + S.pkg);
   if (!res.ok) { log('test: ' + res.error, 'err'); return; }
   S.test = res.test;
   S.testSeen = '';
-  log(`test ${res.test.name}: setting up the copies, then the game starts (lane ${res.test.lane}); log in, PLAY, PRACTICE DAWNGATE`, 'ok');
+  S.testLines = 0;
+  log(`test ${res.test.name}: ${again ? 'the game closes and starts again on the saved version' : 'the game starts in a moment'};` +
+    ' log in on This PC with any name, then PLAY, PRACTICE DAWNGATE', 'ok');
   updateTestButton();
-  pollTest();
+  if (!S.testPolling) pollTest();
 }
 async function stopTest() {
-  const force = S.test && S.test.stopped && confirm('The session is still ending. Stop its processes at once?');
+  const force = S.test && S.test.stopped && confirm('The game is still closing. End it at once?');
   const res = await api('POST', '/api/test-stop' + (force ? '?force=1' : ''));
-  log(res.ok ? 'test: stopping (the game closes, then the session cleans up)' : 'stop: ' + res.error, res.ok ? '' : 'err');
+  log(res.ok ? 'test: stopping (the game closes)' : 'stop: ' + res.error, res.ok ? '' : 'err');
 }
 async function pollTest(quiet) {
-  const res = await api('GET', '/api/test');
-  const t = res.test;
-  if (!t) return;
+  S.testPolling = true;
+  let res;
+  try { res = await api('GET', '/api/test'); } catch (e) { res = {}; }
+  const t = res && res.test;
+  if (!t) { S.testPolling = false; return; }
+  if (quiet && !t.running) { S.test = t; S.testPolling = false; updateTestButton(); return; } // an earlier Test's result
+  if (!S.test || S.test.name !== t.name) { S.testSeen = ''; S.testLines = 0; }
   S.test = t;
-  if (quiet && !t.running) return; // an earlier Test's result: nothing to follow
-  const line = t.phase + (t.stopped ? ' (stopping)' : '');
+  // the Test's own lines since the last poll (the backend keeps its last ones)
+  const tail = res.tail || [];
+  if (tail.length < (S.testLines || 0)) S.testLines = 0;
+  for (const l of tail.slice(S.testLines || 0)) log(`  ${l}`, /FAILED/.test(l) ? 'err' : '');
+  S.testLines = tail.length;
+  const line = (TEST_PHASES[t.phase] || t.phase) + (t.stopped && t.running ? ' (stopping)' : '');
   if (line !== S.testSeen) { S.testSeen = line; log(`test ${t.name}: ${line}`); }
   updateTestButton();
-  if (t.running) { setTimeout(pollTest, 2000); return; }
+  if (t.running) { setTimeout(pollTest, 1500); return; }
+  S.testPolling = false;
   if (t.error) log(`test ${t.name}: ${t.error}`, 'err');
-  else log(`test ${t.name}: over (run_session.ps1 exit ${t.exit}); logs in ${t.sessionDir}`, 'ok');
-  for (const l of (res.summary || '').split(/\r?\n/)) if (/^(play|egress|cleanup|host ctl)\s*:/.test(l)) log('  ' + l);
+  else log(`test ${t.name}: over${t.stopped ? ' (stopped)' : ''}`, 'ok');
 }
 function updateTestButton() {
-  const b = $('btnTest'), on = S.config && S.config.test && S.config.test.enabled, run = S.test && S.test.running;
-  b.textContent = run ? 'Stop' : 'Test';
-  b.disabled = !run && (!S.doc || !on);
-  b.title = run ? 'End the test match (the game closes, then the session cleans up)'
-    : on ? `Save, then play a practice match on this map (lane ${S.config.test.lane}: ${S.config.test.player})`
-      : (S.config && S.config.test && S.config.test.reason) || '';
+  const b = $('btnTest'), stop = $('btnTestStop'), state = $('testState');
+  const on = S.config && S.config.test && S.config.test.enabled, run = S.test && S.test.running;
+  const starting = run && S.test.phase !== 'playing'; // one Test at a time until its game runs
+  b.textContent = run && !starting ? 'Test again' : 'Test';
+  b.disabled = !S.doc || !on || starting;
+  b.title = !on ? (S.config && S.config.test && S.config.test.reason) || ''
+    : starting ? 'A Test is starting: wait until the game runs, or press Stop'
+      : run ? 'Save, then close the game and start it again on the saved version'
+        : 'Save, then play this map in the game: log in on This PC, then PLAY, PRACTICE DAWNGATE';
+  stop.classList.toggle('hidden', !run);
+  state.classList.toggle('hidden', !S.test);
+  if (S.test) {
+    state.textContent = 'test: ' + (TEST_PHASES[S.test.phase] || S.test.phase);
+    state.className = 'badge' + (run ? ' busy' : S.test.error ? ' fail' : ' ok');
+  }
 }
 
-function newDialog() {
+// New from template: the page's templates (source "templates") and the maps folder's packages ("maps"); the
+// option's value is "<source>:<pkg>". Save as my own copy (own) is the same dialog on the open delivered package:
+// the copy is made from it, then the page's document, edits and all, is saved into the copy under the new names.
+function newDialog(own) {
   const sel = $('newTemplate');
   sel.textContent = '';
-  for (const m of (S.config && S.config.maps) || []) sel.append(h('option', { value: m.pkg, selected: m.pkg === S.pkg }, m.pkg));
+  const groups = [['templates', 'Templates', (S.config && S.config.templates) || []], ['maps', 'Your maps folder', (S.config && S.config.maps) || []]];
+  for (const [src, title, list] of groups) {
+    if (!list.length) continue;
+    const g = h('optgroup', { label: title });
+    for (const m of list) g.append(h('option', { value: src + ':' + m.pkg, selected: src === 'maps' && m.pkg === S.pkg }, m.pkg + (m.display ? ' - ' + m.display : '')));
+    sel.append(g);
+  }
+  sel.disabled = !!own;
+  $('dlgNew').dataset.own = own ? '1' : '';
+  $('dlgNew').querySelector('h2').textContent = own ? 'Save ' + S.pkg + ' as my own copy' : 'New map from a template';
   $('dlgNew').showModal();
 }
 $('dlgNew').addEventListener('close', async () => {
   if ($('dlgNew').returnValue !== 'ok') return;
+  const own = $('dlgNew').dataset.own === '1' && S.doc && S.delivered;
   const f = new FormData($('formNew'));
-  const q = { template: f.get('template'), name: f.get('name'), display: f.get('display'), tag: f.get('tag'), prefix: f.get('prefix') };
+  const [source, template] = own ? ['maps', S.pkg] : String($('newTemplate').value).split(/:(.*)/s);
+  const q = { template, source, name: f.get('name'), display: f.get('display'), tag: f.get('tag'), prefix: f.get('prefix'), keepAdded: !!own };
   const res = await api('POST', '/api/new', q);
   if (!res.ok) { log('new: ' + res.error, 'err'); return; }
   log(`made ${res.pkg} from ${q.template}`, 'ok');
+  if (own) {
+    const copy = await api('GET', '/api/map/' + res.pkg);
+    const doc = JSON.parse(snapshot());
+    try {
+      const names = JSON.parse(copy.text);
+      for (const k of ['name', 'display', 'tag', 'prefix']) if (k in names) doc[k] = names[k];
+    } catch (e) { log('the copy: ' + e.message, 'err'); return; }
+    const sv = await api('POST', `/api/save/${res.pkg}?base=${copy.sha256}`, JSON.stringify(doc));
+    if (!sv.ok) { log('saving the copy: ' + sv.error, 'err'); return; }
+    log(`saved your edits into ${res.pkg}`, 'ok');
+    S.doc = null; // nothing unsaved is lost: openMap asks no question
+  }
   await loadState();
   await openMap(res.pkg);
 });
@@ -1492,7 +1548,9 @@ $('btnRedo').onclick = redo;
 $('btnSave').onclick = () => save();
 $('btnBuild').onclick = build;
 $('btnTest').onclick = testMap;
-$('btnNew').onclick = newDialog;
+$('btnTestStop').onclick = stopTest;
+$('btnNew').onclick = () => newDialog(false);
+$('btnSaveOwn').onclick = () => newDialog(true);
 $('bgAlpha').oninput = e => { S.bgAlpha = e.target.value / 100; render(); };
 $('optJoined').onchange = () => { renderInspector(); render(); };
 document.querySelectorAll('[data-tool]').forEach(b => { b.onclick = () => setTool(b.dataset.tool); });

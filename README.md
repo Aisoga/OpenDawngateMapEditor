@@ -155,16 +155,20 @@ saves, Ctrl+Z and Ctrl+Y undo and redo.
 ## Test: play your map
 
 Press **Test**. The editor checks the saved map (it offers to save first), closes the game if it runs, builds the map
-into your game and starts it with **This PC** selected and your map set:
+into your game and starts it with **This PC** selected and your map set. The log under the map shows each step, and
+the badge beside the button the current one:
 
-1. Log in with any name (This PC checks no password).
+1. Log in with any name (This PC checks no password). The login starts the server on your PC with your map; the
+   first time it also sets up the match host, which takes about half a minute.
 2. PLAY, then PRACTICE, then PRACTICE DAWNGATE: the practice match plays your map, five against five with bots.
 
-Each later *Test* closes the game and starts it again with the new version: the game loads its maps only when it
-starts. **Stop** closes the game. A map that fails the check doesn't start; its findings are in the list.
+While the game runs, the button says **Test again**: it closes the game and starts it again with the saved version
+(the game loads its maps only when it starts). **Stop** closes the game. A map that fails the check doesn't start:
+the log shows its first error, and *Check* lists them all. Another map in the `maps` folder that can't be built is
+left out of the game (the log says why); only the map you test must build.
 
-*Test* doesn't run while `Start-Server.exe` runs in the same folder (it is This PC then). Stop it, or name your map
-in its `Start-Server.ini` and play there.
+*Test* doesn't run while `Start-Server.exe` runs in the same folder (it is This PC then), and the editor doesn't start
+while it does. Stop it, or name your map in its `Start-Server.ini` (`map = CM_<name>`) and play there.
 
 ## Sharing a map
 
@@ -191,8 +195,13 @@ next login there. *Save as my own copy* makes a package of your own from it.
   *Releases* pages.
 - **The console says to unpack the editor:** the `editor` folder is missing or in the wrong place. Unpack the zip
   into the folder with `Start-Client.exe`.
-- **Test refuses to start:** read the line in the *Test* panel. A map that fails the check, `Start-Server.exe`
-  running in the same folder, or another `Start-Client.exe` whose game runs are the usual reasons.
+- **The console says the editor needs the server picker:** your `Start-Client.ini` sets a server, `picker = off` or
+  `tunnel = off`. The editor plays on This PC, which only the server list has: empty `server =` and set
+  `picker = auto` and `tunnel = auto`.
+- **The console says a Dawngate client is already running:** close the game (or the other `Start-Client.exe`), then
+  start the editor again.
+- **Test refuses to start:** read the line in the log. A map that fails the check, `Start-Server.exe` running in the
+  same folder, another game running, or a *Test* that is still starting are the usual reasons.
 
 ## Licence
 

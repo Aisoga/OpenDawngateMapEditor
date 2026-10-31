@@ -16,10 +16,13 @@
   <button id="btnRedo" title="Redo (Ctrl+Y)">Redo</button>
   <span class="sep"></span>
   <button id="btnSave" title="Save map.json (Ctrl+S); unchanged values keep their bytes">Save</button>
+  <button id="btnSaveOwn" class="hidden" title="A map from a server is replaced at your next login there: keep your edits in a package of your own">Save as my own copy...</button>
+  <span id="readOnly" class="badge hidden">from a server: read-only</span>
   <button id="btnBuild" title="mapc build into the output folder">Build</button>
   <label class="small" title="Leave the cooked PhysX mesh out (the archive is for inspection only)"><input type="checkbox" id="optNoMesh"> no mesh</label>
-  <label class="small" title="Write the archive into the -install copy's game\Data instead of the output folder"><input type="checkbox" id="optInstall"> into the copy</label>
   <button id="btnTest" disabled>Test</button>
+  <button id="btnTestStop" class="hidden" title="Close the game">Stop</button>
+  <span id="testState" class="badge hidden"></span>
   <span class="grow"></span>
   <span id="checkState" class="badge">no map</span>
   <span id="dirty" class="badge hidden">unsaved</span>
