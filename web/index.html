@@ -7,88 +7,79 @@
 <link rel="stylesheet" href="ground.css">
 </head>
 <body>
-<header id="top">
-  <span class="brand">Map editor</span>
-  <label>Map <select id="mapSelect"><option value="">(open a map)</option></select></label>
-  <button id="btnNew" title="A new package from a template map">New from template...</button>
+<!-- The frame (frame.js): the menu bar, the toolbar, the minimap with the selection below it, one main view (2-D or
+     3-D), the palettes docked on the right as tabs (Terrain, Doodads, Units, Lanes) and the four-part status bar. -->
+<nav id="menubar" aria-label="Menu bar"></nav>
+
+<header id="toolbar">
+  <button id="btnNew" title="New Map from Template... (Ctrl+N)">New</button>
+  <button id="btnOpen" title="Open Map... (Ctrl+O)">Open</button>
+  <button id="btnSave" title="Save Map (Ctrl+S)">Save</button>
   <span class="sep"></span>
-  <button id="btnUndo" title="Undo (Ctrl+Z)">Undo</button>
-  <button id="btnRedo" title="Redo (Ctrl+Y)">Redo</button>
+  <button id="btnUndo" title="Undo (Ctrl+Z)"><i class="ic">&#x21B6;</i>Undo</button>
+  <button id="btnRedo" title="Redo (Ctrl+Y)"><i class="ic">&#x21B7;</i>Redo</button>
   <span class="sep"></span>
-  <button id="btnSave" title="Save map.json (Ctrl+S); unchanged values keep their bytes">Save</button>
-  <button id="btnSaveOwn" class="hidden" title="A map from a server is replaced at your next login there: keep your edits in a package of your own">Save as my own copy...</button>
-  <span id="readOnly" class="badge hidden">from a server: read-only</span>
-  <button id="btnBuild" title="mapc build into the output folder">Build</button>
-  <label class="small" title="Leave the cooked PhysX mesh out (the archive is for inspection only)"><input type="checkbox" id="optNoMesh"> no mesh</label>
-  <button id="btnTest" disabled>Test</button>
-  <button id="btnTestStop" class="hidden" title="Close the game">Stop</button>
-  <span id="testState" class="badge hidden"></span>
+  <button id="btnSelect" data-tool="select" title="Select (Space switches between selecting and the palette's tool)"><i class="ic">&#x2196;</i>Select</button>
+  <span class="sep"></span>
+  <button data-tab="terrain" title="Terrain palette (T)"><b>T</b> Terrain</button>
+  <button data-tab="doodads" title="Doodad palette (D)"><b>D</b> Doodads</button>
+  <button data-tab="units" title="Unit palette (U)"><b>U</b> Units</button>
+  <button data-tab="lanes" title="Lane palette (L)"><b>L</b> Lanes</button>
+  <span class="sep"></span>
+  <span class="seg" id="viewSeg"></span>
+  <span class="sep"></span>
+  <button id="btnTest" class="test" disabled><i class="ic">&#x25B6;</i>Test Map</button>
+  <button id="btnTestStop" class="hidden" title="Stop the Test: close the game">Stop</button>
   <span class="grow"></span>
-  <span id="checkState" class="badge">no map</span>
+  <span id="mapName" class="mapname"></span>
+  <span id="readOnly" class="badge hidden">from a server: read-only</span>
   <span id="dirty" class="badge hidden">unsaved</span>
+  <span id="checkState" class="badge" title="The map check (Map > Check...)">no map</span>
 </header>
 
 <aside id="left">
-  <section class="pane" id="paneTools">
-    <h2>Tools</h2>
-    <div class="tools">
-      <button data-tool="select" class="on" title="Select and drag (Esc clears). Shift+click adds, Ctrl+click adds or removes a prop; drag a box on empty ground (or with Shift or Ctrl anywhere) to select the props it touches">Select</button>
-      <button data-tool="shape" title="Draw a new terrain shape">Shape</button>
-      <button data-tool="well" title="Place a well (team 1's half)">Well</button>
-      <button data-tool="camp" title="Place a camp (its noun in the inspector)">Camp</button>
-      <button data-tool="prop" title="Place the palette's prop with each click (P)">Prop</button>
-      <button data-tool="scatter" title="Scatter the palette's props along the walls in a polygon you draw">Scatter</button>
-    </div>
-    <div id="shapeOpts">
-      <div class="row">
-        <label><input type="radio" name="stype" value="wall" checked> wall</label>
-        <label><input type="radio" name="stype" value="bush"> bush</label>
-        <label><input type="radio" name="stype" value="open"> open</label>
-        <label><input type="radio" name="stype" value="chasm"> chasm</label>
-        <label><input type="radio" name="stype" value="island" title="ground only NPCs walk: a well on it is out of the players' reach"> island</label>
-      </div>
-      <div class="row">
-        <label><input type="radio" name="sgeom" value="circle" checked> circle</label>
-        <label><input type="radio" name="sgeom" value="polygon"> polygon</label>
-        <label><input type="radio" name="sgeom" value="path"> path</label>
-      </div>
-    </div>
-    <p class="hint" id="toolHint">Circle: press at the centre, drag out the radius.</p>
-    <label class="small"><input type="checkbox" id="optSnap"> snap to 1 m (or hold Shift)</label>
-    <label class="small" title="Dragging a lane knot, a well or a camp also moves the shapes joined to it: a clearing centred on it, the ends of the paths and the corners that meet it, and the shapes beside the lane next to a knot (they follow by how near the knot they are)"><input type="checkbox" id="optJoined" checked> drag joined shapes along</label>
+  <section id="minimapBox" title="The minimap: click or drag to move the view">
+    <canvas id="minimap" width="250" height="250"></canvas>
   </section>
-  <section class="pane" id="paneLayers">
-    <h2>Layers</h2>
-    <div id="bgList"><p class="hint">The derived layers appear after the first check.</p></div>
-    <label class="small">opacity <input type="range" id="bgAlpha" min="0" max="100" value="80"></label>
-    <div id="overlayList"></div>
-  </section>
+  <section id="selPreview"></section>
+  <section id="selInfo"><div id="inspector"><p class="hint">Open a map.</p></div></section>
 </aside>
 
 <main id="center">
-  <nav id="viewTabs"></nav>
   <div id="views">
     <div class="view on" id="view2d">
       <canvas id="canvas" tabindex="0"></canvas>
-      <div id="coords"></div>
     </div>
+    <p class="hint" id="toolHint"></p>
+  </div>
+  <div id="messages" class="hidden">
+    <div class="mhead">Messages <button id="btnCloseMessages" title="Close (View > Messages)">&#x2715;</button></div>
+    <div id="log"></div>
   </div>
 </main>
 
-<aside id="right">
-  <section class="pane" id="paneInspector">
-    <h2>Inspector</h2>
-    <div id="inspector"><p class="hint">Open a map.</p></div>
-  </section>
-  <section class="pane" id="paneFindings">
-    <h2>Check <span id="checkSummary" class="small"></span></h2>
-    <div id="findings"></div>
-    <div id="stats" class="small"></div>
-    <div id="botsInfo" class="small"></div>
-  </section>
+<aside id="dock">
+  <nav id="dockTabs">
+    <button data-tab="terrain" data-key="T">Terrain</button><button data-tab="doodads" data-key="D">Doodads</button><button data-tab="units" data-key="U">Units</button><button data-tab="lanes" data-key="L">Lanes</button>
+  </nav>
+  <div id="palette">
+    <div class="ptab" id="tab_terrain"></div>
+    <div class="ptab" id="tab_doodads"></div>
+    <div class="ptab" id="tab_units"></div>
+    <div class="ptab" id="tab_lanes"></div>
+  </div>
 </aside>
 
-<footer id="bottom"><div id="log"></div></footer>
+<footer id="status">
+  <span id="st1" title="The cursor: position, height and the ground kind under it"></span>
+  <span id="st2" title="The tool and its brush"></span>
+  <span id="st3" title="The selection; while editing the measurements (type a number and Enter to set one)"></span>
+  <span id="stSnap" title="Smart snaps: the mirror line, a lane's edge, a midpoint, the grid (click: on or off; Ctrl while dragging: off for the move)"></span>
+  <span id="st4" title="The map check and Test (click: the Map Check window)"><span id="st4check"></span><span id="testState" class="badge hidden"></span><span id="st4flash"></span></span>
+</footer>
+
+<div id="windows"></div>
+<div id="menuLayer"></div>
 
 <dialog id="dlgNew">
   <form method="dialog" id="formNew">
@@ -101,13 +92,19 @@
     <menu><button value="cancel" formnovalidate>Cancel</button> <button value="ok" id="newOk">Create</button></menu>
   </form>
 </dialog>
+<dialog id="dlgHelp"><div id="helpBody"></div><menu><button id="btnHelpClose">Close</button></menu></dialog>
 
 <pre id="selftest" class="hidden"></pre>
 <script src="app.js"></script>
+<script src="frame.js"></script>
 <script src="view3d.js"></script>
 <script src="props.js"></script>
 <script src="propsel.js"></script>
 <script src="ground.js"></script>
 <script src="void.js"></script>
+<script src="overlays.js"></script>
+<script src="relief.js"></script>
+<script src="heights.js"></script>
+<script src="feedback.js"></script>
 </body>
 </html>

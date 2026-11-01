@@ -2,7 +2,7 @@
 
 This guide says what a Dawngate map needs, what `map.json` holds member by member, and every rule the check applies,
 with what to do when a rule fails. The editor writes `map.json` for you; this is for understanding a finding, editing
-the JSON in the inspector, or writing a package by hand.
+the JSON in the selection's Advanced section (or Advanced > Edit the Map as JSON), or writing a package by hand.
 
 ## What a map is
 
@@ -69,7 +69,7 @@ passes unnoticed.
 | `terrain` | the layout: `default` (what the ground is where no shape is: `wall`, `open` or `chasm`) and `shapes`, drawn in order over it, each mirrored | below |
 | `ground` | how the ground looks: `{"style": "tiled"}` (the plain default) or `"baked"` (painted: layers, stamps, a cliff material, your own pictures) | below |
 | `props` | the game's models as dressing: a single model (`noun`) or a piece of an original map's dressing (`group`) | below |
-| `scatter` (optional) | props spread along the walls by a seed | below |
+| `scatter` (optional) | props spread by a seed along the walls, or over a whole region | below |
 | `void` (optional) | what the map shows past its ground: the ground cut off, a plane far below, a mist and the height fog | below |
 | `graph` (optional) | `{"cell": n}`: the size of the walking graphs' squares, 2-4 map cells a side | below |
 | `wards` (optional) | the bots' ward spots, team 1's: `[{"pos": [x, y]}]`, each mirrored, in order of preference; without it the bots use the original map's spots | at most 16 |
@@ -91,6 +91,13 @@ passes unnoticed.
 - geometries: `"lane": <id>` (that lane's corridor at its width), `"circle": [x, y], "r": m`, `"polygon": [[x, y],
   ...]` (3 or more corners, even-odd), or `"path": [[x, y], ...], "width": m` (2 or more points);
 - a bush is a circle or a polygon; an island anything but a lane; `terrain.default` can't be `island`;
+- a wall may set its plateau's **height** and a chasm its depth: `"height": m`, 1 to 40 for a wall, −40 to −1 for a
+  chasm (none: 5 m up or down). Where shapes overlap the later one's height wins, as its type does; neighbouring
+  heights ramp over about 8 m. Walkable ground has no height: the characters always stand on the level floor. A
+  taller cliff is wider (a 12-m wall reaches its full height about 9 m in from the edge), so a tall wall needs room; a
+  chasm's cliff starts at the walkable ground round it, so give a chasm a rim of walkable ground (an `open` shape under
+  it, a few metres wider) where it would meet a wall: cut straight into a wall it drops from the plateau to its floor
+  in one vertical step, which the game draws as a dark pit with a stepped rim;
 - a chasm can hold **water**: `"water": true`, `false`, or `{"z": m (−4.5 to −0.25, default −2), "mask": "none" |
   "circle" | "Chasm_wm_1" ... "_8" | "Fish_wm_1" ... "_6" | "Spirit_Lake_gobo", "look": "river" | "chasm"}`.
 
@@ -101,8 +108,14 @@ passes unnoticed.
   `{"rgb": [r, g, b]}`;
 - `layers` (at most 12, bottom first): `texture`, `scale` (metres a repeat covers), `rot`, `tint`, `vary`, `break`
   (0-1: hides the repeats), `opacity`, and every layer but the first a mask: `auto` (`all`, `floor`, `high`, `slope`,
-  `chasm`, `bushes`), `image` (a grey PNG over the map's square, north up) and `shapes` (painted strokes; `"erase":
-  true` takes away), softened by `soft` and moved by `noise`, mirrored unless `"mirror": false`;
+  `chasm`, `bushes`, `lanes`, `edge`), `image` (a grey PNG over the map's square, north up) and `shapes` (painted
+  strokes; `"erase": true` takes away), softened by `soft` and moved by `noise`, mirrored unless `"mirror": false`;
+- two rules follow your layout, so the art moves with it: **`lanes`** paints both lanes' corridors (`width`: the
+  band's width in metres, 2-120; without it each lane's own width), and a new or moved lane brings its path along;
+  **`edge`** paints a band along the edge of the walkable ground (`range`: `[from, to]` metres from the edge, -20 to
+  60, default `[0, 6]`; a negative `from` reaches onto the wall or into the chasm), against the walls, the chasms
+  or both (`along`: `"walls"`, `"chasms"`, or leave it out). `soft` feathers the band's edges, `noise` breaks them
+  up. Both are worked out again at every build, never saved as paint;
 - `stamps` (at most 64, laid over the layers): `image` (with `rect` to cut a piece), `pos`, `size`, `rot`,
   `opacity`, `tint`, `soft`, `round`, `mirror`;
 - `cliff`: a texture for the steep faces: `texture`, `scale` (6-100 m), `slope` (20-80 degrees), `tint`;
@@ -117,8 +130,22 @@ passes unnoticed.
   dressing of an original map within `r` of `at` (or inside the polygon), without the markers inside `holes`. A
   group neither blocks nor gets a shadow: draw a wall shape where it should block.
 
-**Scatter** (`scatter`): `{"nouns", "seed", "along": "walls", "circle" and "r" or "polygon", "spacing" (at least 1
-m), "inset" (0-10 m), "scale": [min, max], "max" (at most 1,000), "shadow"}`.
+**Scatter** (`scatter`): `{"nouns", "seed", "along", "circle" and "r" or "polygon", "spacing" (at least 1 m, default
+6), "inset" (0-10 m), "scale": [min, max], "max" (at most 1,000 a side, default 200), "shadow"}`, and for a filled area
+`"on"`, `"blocks"`, `"footprint"`, `"density"`. Every scatter is mirrored for team 2, and its props keep `spacing`
+from each other and from their mirrors.
+- `"along": "walls"` (the default): along the wall edge inside the region, `inset` metres into the wall.
+- `"along": "area"`: over the whole region. `"on"` says which ground: `"any"` (the default), `"walls"`,
+  `"off-ground"` (walls and chasms) or `"ground"` (walkable ground). On walkable ground only plants stand without
+  blocking: the nouns whose names begin `grass`, `flowers_`, `foliage_`, `forestbush_`, `forestleaves_`,
+  `fungus_mushroom`, `leaves_`, `lowshrub_`, `plants_` or `pumpkin_leaves`. Rocks, trees and every other noun stand
+  there only with `"blocks": true`, and then each blocks walking and sight in a circle `footprint` metres across
+  (default 2, a trunk) times its size, so units and bots go round it; plants never block. Nothing stands on the lanes
+  (their width plus 2 m), within 18 m of a Guardian, 24 m of a well, 12 m of a camp, 8 m of the Locus, the shop,
+  a spawn point, a Core, a Binding or a minion spawner, or 4 m of a ward spot. `"density"` (over 0, up to 1) keeps
+  that share of the spaced places, for a sparser fill. A filled prop stands on the ground's height (on a plateau, on
+  top of it). A map that uses `"along": "area"` needs the editor and server of this version or later: an older one
+  refuses it (`scatter.along`).
 
 **The void** (`void`; every member optional): `cut` (the ground ends this many metres past the walkable edge),
 `backdrop` (`z`, `texture`, `scale`, `unlit`: the plane under the level), `mist` (`z`, `range`, `color`: a
@@ -158,6 +185,7 @@ These run first; the layout rules run only when they pass.
 | `symmetry.lanes` | lane 2 isn't lane 1 mirrored and walked back (within 0.5 m), or has another width | move the knots in pairs (the editor does it) and give both lanes one width |
 | `refs.environment`, `refs.tuning` | the value isn't `SM_Map_v5` or `MM_Map_v3`, or the game copy lacks that level | use one of the two |
 | `ground.style` | `ground.style` isn't `tiled` or `baked` | fix the style |
+| `ground.width`, `ground.range`, `ground.along` | a `lanes` layer's `width` outside 2-120 m, an `edge` layer's `range` not `[from, to]` with from < to within -20 to 60 m, `along` not `walls` or `chasms`; a warning when another rule's layer has one (it isn't read) | fix the value, or remove it |
 | `lanes.count` | the map has no lane or more than two | one or two lanes |
 | `lanes.ids` | a lane id isn't 1 or 2, or appears twice | use 1 and 2 once each |
 | `lanes.width` | a lane is narrower than 6 m or wider than 80 m | set the width between 6 and 80 |
@@ -172,7 +200,7 @@ These run first; the layout rules run only when they pass.
 | `camps.parasite` | a second parasite camp (an error), or the parasite more than 30 m from the centre (a warning: it isn't mirrored, so it favours one team) | keep one parasite, near the centre |
 | `camps.role` (warning) | a `buff` camp's noun has no Buff or Boar in its name, or a `camp`'s has | match the kind to the spawner, or the bots treat the camp wrongly |
 | `terrain.default` | `terrain.default` isn't `wall`, `open` or `chasm` | fix the value |
-| `terrain.shape` | a shape's type is unknown, it hasn't exactly one geometry, a circle has no `r`, a polygon fewer than 3 corners, a path fewer than 2 points or no width, it names a lane the map hasn't, a bush is a lane or a path, an island is a lane | fix the shape in the inspector |
+| `terrain.shape` | a shape's type is unknown, it hasn't exactly one geometry, a circle has no `r`, a polygon fewer than 3 corners, a path fewer than 2 points or no width, it names a lane the map hasn't, a bush is a lane or a path, an island is a lane | fix the shape in the selection's info (its JSON under Advanced) |
 
 **Props, groups and scatter:**
 
@@ -187,7 +215,10 @@ These run first; the layout rules run only when they pass.
 | `props.type` | a noun isn't dressing (a creature, a tower, a spawn point) | use dressing only; creatures come from camps |
 | `props.shadow` (warning) | a prop with a shadow card has no box for the card | turn the card off |
 | `props.flush` (warning) | a model's top lies at the floor, so it flickers in the game | lift it: the message gives the height (the editor lifts it for you) |
-| `scatter.nouns`, `scatter.along`, `scatter.spacing`, `scatter.inset`, `scatter.scale`, `scatter.max`, `scatter.region` | a scatter has no nouns, `along` isn't `walls`, the spacing is under 1 m, the inset outside 0-10 m, a bad scale range, more than 1,000 props, or its region isn't a circle or a polygon | fix the scatter in the inspector |
+| `scatter.nouns`, `scatter.along`, `scatter.spacing`, `scatter.inset`, `scatter.scale`, `scatter.max`, `scatter.region` | a scatter has no nouns, `along` isn't `walls` or `area`, the spacing is under 1 m, the inset outside 0-10 m, a bad scale range, more than 1,000 props, or its region isn't a circle or a polygon | fix the scatter in the selection's Advanced section |
+| `scatter.on`, `scatter.footprint`, `scatter.density` | a filled area's `on` is none of `any`, `walls`, `off-ground`, `ground`; the footprint isn't over 0 and up to 20 m; the density isn't over 0 and up to 1 (errors). Set on a scatter along the walls, or a footprint without `blocks`, they are warnings: not read; so is `inset` on a filled area | fix them in the region's info |
+| `scatter.decor` (warning) | a fill on walkable ground without `blocks` has no plant among its nouns, so it places nothing | add a plant, tick *Block*, or fill other ground |
+| `scatter.empty` (warning) | a scatter places nothing: no wall edge in its region, or no free ground of the kind it fills | move the region, or change *Where* |
 | `nouns.exist` | a camp's, prop's or scatter's noun isn't one of the game's models | pick one from the palette |
 
 **The void:**
@@ -206,6 +237,10 @@ These run first; the layout rules run only when they pass.
 
 | Rule | It fails when | What to do |
 |---|---|---|
+| `terrain.height` | a height on a shape that isn't a wall or a chasm (walkable ground stays level), a wall's outside 1-40 m, a chasm's outside −40 to −1 m | heights only on walls and chasms, in range |
+| `terrain.height-hide` (warning) | a wall so tall that, from the game's camera (it looks north, the top of the view 36.5° down), it can hide a 2-m character on walkable ground north of it; walls up to 5.4 m never do | lower the wall where it meets walkable ground, or move its tall part back (the message says how far) |
+| `terrain.height-void` (warning) | a chasm deeper than the void's backdrop, which then covers its bottom | lower the backdrop, or make the chasm shallower |
+| `terrain.height-step` (warning, on a map with heights) | a chasm cut straight into a wall: away from walkable ground the ground drops from the plateau to the chasm's floor in one step (the message gives the drop), a vertical face the game draws as a dark pit with a stepped rim | draw an `open` shape under the chasm, a few metres wider, so walkable ground rims it where it meets the wall |
 | `terrain.water` | water on a shape that isn't a chasm, its z out of range, an unknown mask (an error); a chasm whose ground never drops below its water, so no water shows (a warning) | water only in chasms; deepen the chasm or raise the water |
 | `terrain.water-overlap` (warning) | two watered chasms' water overlaps (drawn twice) | separate them, or water one of them |
 | `graph.cell` | a set `graph.cell` outside 2-4 | 2, 3 or 4, or leave it out |

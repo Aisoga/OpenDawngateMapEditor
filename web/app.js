@@ -1,35 +1,114 @@
 // The map editor's page: a 2-D canvas over map.json (format 1). The document is the parsed map.json itself, so
 // members the page doesn't know stay in it; the server writes it back in the file's own layout and checks every
-// edit with mapc. Later panes (the 3-D view, props, ground paint) plug in through ED: ED.on('doc' | 'preview' |
-// 'select' | 'open' | 'started', fn), ED.addView({id, title, el}) for a tab beside the 2-D view,
-// ED.addPane(side, title), ED.selftests[mode] for a pane's own ?selftest=<mode>.
+// edit with mapc. The frame (frame.js: menus, toolbar, minimap, docked palettes, status bar) and the other parts (the
+// 3-D view, props, ground paint, the void) plug in through ED: ED.on('doc' | 'preview' | 'select' | 'open' |
+// 'started', fn), ED.addView({id, title, el, pick, project, ...}) for the main view's other mode (3-D; the views'
+// contract and the one input pipeline for both: ED.views, VIEW2D, inputDown), ED.addPane(home, title) for a
+// group in a palette tab or a window, ED.actions[name] for what a menu item runs, ED.selftests[mode] for a part's own
+// ?selftest=<mode>.
 'use strict';
 
 const ED = {
   handlers: {},
   on(ev, fn) { (this.handlers[ev] = this.handlers[ev] || []).push(fn); },
   emit(ev, ...a) { (this.handlers[ev] || []).forEach(fn => { try { fn(...a); } catch (e) { log(String(e), 'err'); } }); },
-  views: [],
-  addView(v) { // v: {id, title, el}; el is placed in #views
+  // the main views (EDUX2): views[id] = {id, title, el, pick, pickAt, project, ppm, overlay} (the contract at VIEW2D
+  // below); '2d' is app.js's canvas, a part adds another with addView (view3d.js: '3d'); one shows at a time, ED.view
+  views: {}, view: '2d',
+  addView(v) { // v: {id, title, el, ...the contract; what it leaves out can't pick or draw}; el is placed in #views
     v.el.classList.add('view');
     v.el.id = v.el.id || 'view' + v.id;
     $('views').appendChild(v.el);
-    this.views.push(v);
+    const none = { pick: () => null, pickAt: () => null, project: () => null, ppm: () => 0, overlay: null };
+    for (const k of Object.keys(none)) if (v[k] === undefined) v[k] = none[k];
+    this.views[v.id] = v;
     renderTabs();
   },
+  active() { return this.views[this.view] || this.views['2d']; }, // the view shown
+  setView(id) { // shows the view id ('2d' or an added one) and emits 'view'
+    const all = Object.values(this.views);
+    if (!all.some(v => v.id === id)) return;
+    all.forEach(v => v.el.classList.toggle('on', v.id === id));
+    this.view = id;
+    renderTabs();
+    if (id === '2d') resize();
+    this.emit('view', id);
+  },
+  // what the menus, the toolbar and the keys run (frame.js): actions[name] = fn; a part registers its own
+  actions: {},
+  act(name, ...a) { const fn = this.actions[name]; if (fn) return fn(...a); log('no such action: ' + name, 'err'); },
+  // windows: floating panels over the view (the Map menu's, the Advanced menu's, the Map Check); window(id, title)
+  // makes one (hidden) and returns its body, openWindow(id) shows it
+  windows: {},
+  window(id, title) {
+    if (this.windows[id]) return this.windows[id].body;
+    const sec = document.createElement('section');
+    sec.className = 'win hidden';
+    sec.id = 'win_' + id;
+    sec.innerHTML = '<div class="wh"><span></span><button title="Close">&#x2715;</button></div><div class="wb"></div>';
+    sec.querySelector('.wh span').textContent = title;
+    sec.querySelector('.wh button').onclick = () => this.closeWindow(id);
+    $('windows').appendChild(sec);
+    const head = sec.firstChild;
+    head.addEventListener('mousedown', e => { // drag the window by its title
+      if (e.target.tagName === 'BUTTON') return;
+      const r = sec.getBoundingClientRect(), x0 = e.clientX, y0 = e.clientY;
+      const mv = ev => { sec.style.left = (r.left + ev.clientX - x0) + 'px'; sec.style.top = Math.max(0, r.top + ev.clientY - y0) + 'px'; sec.style.right = 'auto'; };
+      const up = () => { window.removeEventListener('mousemove', mv); window.removeEventListener('mouseup', up); };
+      window.addEventListener('mousemove', mv);
+      window.addEventListener('mouseup', up);
+    });
+    this.windows[id] = { el: sec, body: sec.lastChild, title };
+    return sec.lastChild;
+  },
+  openWindow(id) {
+    const w = this.windows[id];
+    if (!w) return;
+    w.el.classList.remove('hidden');
+    $('windows').appendChild(w.el); // on top of the others
+    this.emit('window', id, true);
+  },
+  closeWindow(id) { const w = this.windows[id]; if (w) { w.el.classList.add('hidden'); this.emit('window', id, false); } },
+  isOpen(id) { const w = this.windows[id]; return !!w && !w.el.classList.contains('hidden'); },
   // plug-ins (props.js): sel[t] = {value(sel), inspector(el, sel), move(drag, w, e), del(sel)} for a selection type,
   // tools[name] = {down(w, e), move(w, e) and up() (a tool that drags: ground.js), finish(pts) (a polygon drawn
   // with the tool), hover, hint}, hitFirst/hitItems:
-  // fn(sx, sy, w, near) -> {sel, mirrored} before the objects (handles) and after them (items), keys(e) -> true;
-  // down: fn(h, e, w) -> true takes a Select click itself (h the hit or null; propsel.js: Shift/Ctrl+click, the box,
+  // fn(sx, sy, w, near, pk) -> {sel, mirrored} before the objects (handles) and after them (items), keys(e) -> true;
+  // near(p, px) is true when the world point p shows within px CSS pixels of the mouse (through the view's project),
+  // pk the view's pick (pk.near: the metres a CSS pixel covers there);
+  // down: fn(h, e, w, pk) -> true takes a Select click itself (h the hit or null; propsel.js: Shift/Ctrl+click, the box,
   // dragging a multiple selection) and may set S.grab = {move(w, e), up()} to follow the mouse until it is let go
-  sel: {}, tools: {}, hitFirst: [], hitItems: [], keys: null, down: [],
-  addPane(side, title) { // returns the pane's body element
+  // tools[name].status() -> the status bar's tool part (its brush, the doodad being placed); tools[name].tab: the
+  // palette tab the tool belongs to (Space switches between Select and the tab's last tool)
+  // previews: fn(v) draws what a tool is about to do (a ghost, the brush, a drawing in progress, the scatter's estimate)
+  // through the view v: v.overlay (a 2-D context), v.project(p), v.ppm(p); drawPreviews(v) runs them (2-D: render())
+  // wheels: fn(e) -> true takes the wheel after the armed tool's (props.js: Alt+wheel raises the selected doodads)
+  sel: {}, tools: {}, hitFirst: [], hitItems: [], keys: null, down: [], previews: [], marks: [], wheels: [],
+  drawPreviews(v) {
+    if (!v || !v.overlay || !S.doc) return;
+    for (const fn of this.previews) { try { fn(v); } catch (e) { log(String(e), 'err'); } }
+  },
+  // marks: fn(v) draws the selection's rings and handles through a view other than the 2-D (whose render() draws the
+  // same through the 'draw' events); drawOverlay(v) draws a view's whole overlay: the marks, the previews, the check's
+  // markers (EDUX3: the 3-D view each frame)
+  drawOverlay(v) {
+    if (!v || !v.overlay || !S.doc) return;
+    for (const fn of this.marks) { try { fn(v); } catch (e) { log(String(e), 'err'); } }
+    this.drawPreviews(v);
+    try { drawFindings(v); } catch (e) { log(String(e), 'err'); }
+  },
+  // addPane(home, title, order) returns the body of a new group: home 'terrain' | 'doodads' | 'units' | 'lanes' (a
+  // palette tab; groups sorted by order, then as added) or 'window:<id>' (a window, made hidden: ED.openWindow)
+  addPane(home, title, order) {
+    if (String(home).startsWith('window:')) return this.window(home.slice(7), title);
+    const tab = $('tab_' + home) || $('tab_terrain');
     const sec = document.createElement('section');
-    sec.className = 'pane';
-    sec.innerHTML = '<h2></h2><div></div>';
+    sec.className = 'grp';
+    sec.dataset.order = order === undefined ? 50 : order;
+    sec.innerHTML = '<div class="gh"></div><div></div>';
     sec.firstChild.textContent = title;
-    $(side === 'left' ? 'left' : 'right').appendChild(sec);
+    const after = [...tab.children].find(c => +c.dataset.order > +sec.dataset.order);
+    tab.insertBefore(sec, after || null);
     return sec.lastChild;
   },
 };
@@ -37,11 +116,19 @@ const ED = {
 const S = {
   config: null, pkg: null, doc: null, base: null, savedJSON: null, undo: [], redo: [],
   sel: null, hover: null, hoverFinding: null, tool: 'select', drawing: null, drag: null,
+  // the Terrain tab's Apply Cliff: the kind a new shape gets (wall, open, chasm, water = a chasm with water, island,
+  // bush) the Terrain tab draws, and the draw mode it and the textures share (brush, polygon, circle, path); the Units tab's + Well or + Mine
+  cliff: 'wall', draw: 'brush', wellKind: 'well', stroke: null, lastMaterial: 'shape',
+  // the brush both materials draw with (ground.js's G.brush is this object): size and soft edge (m), erase and into
+  // the picture (textures), its shape (circle or square)
+  brush: { size: 8, soft: 3, erase: false, raster: false, shape: 'circle' },
+  snap: false, joined: true, noMesh: false, // Tools > Snap to 1 m, Tools > Drag Joined Shapes Along, Advanced > Build without the PhysX Mesh
   report: null, preview: null, images: null, rev: 0, checkSeq: 0, checking: false, checkTimer: 0,
   bg: 'layout.png', bgAlpha: 0.8, img: null, imgFile: '', imgRev: 0,
   show: { shapes: true, mirror: true, lanes: true, objects: true, props: true, findings: true, bots: true, half: true, grid: false },
   fitted: false, partIdx: {},
-  placed: null, placedFrom: null, mouseW: null,
+  placed: null, placedFrom: null, mouseW: null, press: null, // mouseW: the world under the mouse by the shown view's pick (null where it cannot pick); press: the view that took the left press
+  near: 1, // the metres a CSS pixel covers at the last pick (the snaps' reach: feedback.js)
   view: { x: 0, y: 0, scale: 1 }, mouse: null, pan: null, grab: null,
 };
 
@@ -58,12 +145,33 @@ const TYPE = {
   bush: ['rgba(60,170,70,0.60)', '#6fe07a'],
 };
 const TIERS = ['Outer', 'Middle', 'Inner'];
+const LANE_MIN = 6, LANE_MAX = 80; // the check's lanes.width (mapc MinLaneWidth, MaxLaneWidth)
+// setLaneWidth sets both lanes' width (the Lanes tab's and the inspector's field) as one undo step; a width the check
+// refuses (lanes.width) is refused here (EDUX6), the field shows the width again
+function setLaneWidth(v, input) {
+  if (!(v >= LANE_MIN && v <= LANE_MAX)) {
+    log(`a lane is ${LANE_MIN} to ${LANE_MAX} m wide (lanes.width): ${v} m refused`, 'err');
+    if (input) input.value = (lanes()[0] || {}).width;
+    return false;
+  }
+  edit(d => d.lanes.forEach(x => { x.width = v; }));
+  return true;
+}
 
+// log writes a line into the Messages window (View > Messages, closed by default); an error also flashes in the status
+// bar's last part for a few seconds
 function log(msg, cls) {
   const d = document.createElement('div');
   if (cls) d.className = cls;
   d.textContent = new Date().toLocaleTimeString() + '  ' + msg;
   $('log').prepend(d);
+  if (cls === 'err') {
+    const f = $('st4flash');
+    f.textContent = msg;
+    f.title = msg + ' (View > Messages)';
+    clearTimeout(log.timer);
+    log.timer = setTimeout(() => { f.textContent = ''; }, 6000);
+  }
 }
 
 async function api(method, url, body) {
@@ -140,14 +248,15 @@ function updateDirty() {
   $('btnUndo').disabled = !S.undo.length;
   $('btnRedo').disabled = !S.redo.length;
   $('btnSave').disabled = !S.doc || !!S.delivered;
-  $('btnSave').title = S.delivered ? S.delivered.why : 'Save map.json (Ctrl+S); unchanged values keep their bytes';
-  $('btnSaveOwn').classList.toggle('hidden', !S.doc || !S.delivered);
+  $('btnSave').title = S.delivered ? S.delivered.why : 'Save Map (Ctrl+S): map.json; unchanged values keep their bytes';
   $('readOnly').classList.toggle('hidden', !S.doc || !S.delivered);
-  if (S.delivered) $('readOnly').title = S.delivered.why;
-  $('btnBuild').disabled = !S.doc || !S.config || !S.config.copy;
+  if (S.delivered) $('readOnly').title = S.delivered.why + ' (File > Save as My Own Copy)';
+  $('mapName').textContent = S.doc ? S.pkg + (S.doc.display ? ' (' + S.doc.display + ')' : '') : '';
   updateTestButton();
   return dirty;
 }
+// canBuild: File > Build needs a game copy (the backend's)
+function canBuild() { return !!S.doc && !!S.config && !!S.config.copy; }
 
 function lanes() { return Array.isArray(S.doc.lanes) ? S.doc.lanes : []; }
 function laneById(id) { return lanes().find(l => l && l.id === id); }
@@ -187,6 +296,74 @@ function insertKnot(li, k) {
   const pk = L.length === 2 ? partnerKnot(li, k) : null;
   a.splice(k + 1, 0, p);
   if (pk) L[pk[0]].knots.splice(n - 1 - k, 0, mir(p));
+}
+// setLaneCount switches the map between one lane and two (the Lanes tab), as one undo step, so that the check passes:
+// - two -> one: a lane that is its own mirror walked back must pass the centre, so lane 1 keeps its base exit (its
+//   first knot, and its second while that is on team 1's half) and runs through the centre (0, 0) to their mirrors
+//   (its corridor shape follows; one is added when it has none); lane 2 and the shapes that follow it go; Bindings placed by hand go back
+//   to "auto" (they stood on the old routes); the confirm names what is replaced.
+// - one -> two: lane 2 is the lane's mirror walked back (each shape that follows lane 1 gets a twin for lane 2), so both start on the same path (as on the second original
+//   map: Bindings on one lane are enough there); dragging lane 1's knots parts them (each partner follows mirrored).
+// eachLaneShapeList calls fn with every list of shapes that may follow a lane: terrain.shapes and each ground layer's
+function eachLaneShapeList(d, fn) {
+  if (d.terrain && Array.isArray(d.terrain.shapes)) fn(d.terrain.shapes);
+  if (d.ground && Array.isArray(d.ground.layers)) d.ground.layers.forEach(l => { if (l && Array.isArray(l.shapes)) fn(l.shapes); });
+}
+function eachLaneShape(d) { // the shapes with a "lane"; a ground layer's marked layer: true
+  const out = [];
+  if (d.terrain && Array.isArray(d.terrain.shapes)) d.terrain.shapes.forEach(s => { if (s && s.lane !== undefined) out.push(s); });
+  if (d.ground && Array.isArray(d.ground.layers)) d.ground.layers.forEach(l => (l && Array.isArray(l.shapes) ? l.shapes : []).forEach(s => { if (s && s.lane !== undefined) out.push({ lane: s.lane, layer: true }); }));
+  return out;
+}
+function setLaneCount(n) {
+  const L = lanes();
+  if (!S.doc || !L.length || L.length === n || (n !== 1 && n !== 2)) return false;
+  const b = S.doc.base || {}, explicit = !!b.bindings && typeof b.bindings === 'object';
+  if (n === 1) {
+    const l1 = L.find(l => l && l.id === 1) || L[0], ks = l1.knots.filter(isPt);
+    const exit = ks.slice(0, 2).filter((p, i) => i === 0 || (p[0] + p[1] < -2 && Math.hypot(p[0], p[1]) > 2));
+    const lost = [];
+    if (ks.length > exit.length) lost.push(`lane ${l1.id}'s route past its base exit (${ks.length - exit.length} knots)`);
+    lost.push('lane ' + L.filter(l => l !== l1).map(l => l.id).join(', '));
+    if (explicit) lost.push('the Bindings you placed (back to "auto")');
+    if (ks.length > exit.length || explicit) {
+      if (!confirm('One lane through the centre: ' + lost.join('; ') + ' will be replaced; the lane\'s corridor follows its new route. Go on?')) return false;
+    }
+    const knots = exit.concat([[0, 0]], exit.slice().reverse().map(mir));
+    edit(d => {
+      const keep = d.lanes.find(l => l && l.id === l1.id) || d.lanes[0], gone = d.lanes.filter(l => l !== keep).map(l => l.id);
+      keep.knots = knots.map(p => p.slice());
+      d.lanes = [keep];
+      if (explicit) d.base.bindings = 'auto';
+      // the shapes that followed the old routes ({"lane": id}: a corridor, a ground layer's band) stay where they were,
+      // as plain paths, so the ground the map was built round stays walkable and painted
+      const old = {};
+      L.forEach(l => { old[l.id] = { knots: l.knots.filter(isPt).map(p => p.slice()), width: +l.width || 24 }; });
+      eachLaneShapeList(d, list => list.forEach((s, i) => {
+        if (!s || !old[s.lane]) return;
+        const o = Object.assign({}, s, { path: old[s.lane].knots.map(p => p.slice()), width: s.width !== undefined ? s.width : old[s.lane].width });
+        delete o.lane;
+        list[i] = o;
+      }));
+      // the new route crosses the middle of the map: its corridor goes last, over what lies there, so the minions can
+      // walk it (the lane's own corridor shapes keep their place)
+      d.terrain = d.terrain && typeof d.terrain === 'object' ? d.terrain : { default: 'wall' };
+      d.terrain.shapes = Array.isArray(d.terrain.shapes) ? d.terrain.shapes : [];
+      d.terrain.shapes.push({ type: 'open', lane: keep.id });
+    });
+  } else {
+    edit(d => {
+      const l = d.lanes[0];
+      if (l.id !== 1 && l.id !== 2) l.id = 1;
+      const id2 = 3 - l.id;
+      d.lanes.push(Object.assign(JSON.parse(JSON.stringify(l)), { id: id2, knots: l.knots.slice().reverse().map(mir) }));
+      d.lanes.sort((a, c) => a.id - c.id);
+      // each shape that follows the lane gets its twin on the new lane, right after it
+      eachLaneShapeList(d, list => { for (let i = list.length - 1; i >= 0; i--) if (list[i] && list[i].lane === l.id) list.splice(i + 1, 0, Object.assign(JSON.parse(JSON.stringify(list[i])), { lane: id2 })); });
+    });
+  }
+  select(null);
+  return true;
 }
 function deleteKnot(li, k) {
   const L = lanes();
@@ -253,7 +430,7 @@ function selValue(sel) {
     case 'shape': case 'radius': return shapes()[sel.i];
     case 'vertex': { const s = shapes()[sel.i]; return s && (s.polygon || s.path || [])[sel.v]; }
     case 'knot': return getAt(S.doc, ['lanes', sel.l, 'knots', sel.k]);
-    case 'lane': return lanes()[sel.l];
+    case 'lane': case 'lwidth': return lanes()[sel.l];
     default: return ED.sel[sel.t] && ED.sel[sel.t].value ? ED.sel[sel.t].value(sel) : undefined;
   }
 }
@@ -273,12 +450,12 @@ function selectPath(str) {
   }
   if (p[0] === 'props' && typeof p[1] === 'number') return select({ t: 'prop', k: p[1] });
   if (p[0] === 'scatter' && typeof p[1] === 'number') return select({ t: 'scatter', k: p[1] });
-  if ((p[0] === 'wells' || p[0] === 'camps') && typeof p[1] === 'number') {
+  if ((p[0] === 'wells' || p[0] === 'camps' || p[0] === 'wards') && typeof p[1] === 'number') {
     return select({ t: 'obj', path: [p[0], p[1], 'pos'] });
   }
   if (p[0] === 'base' && p.length >= 2 && isPt(getAt(S.doc, p))) return select({ t: 'obj', path: p });
   select(null);
-  if (p[0] === 'void') ED.emit('focus-void', str); // the void panel (void.js) shows its field
+  if (p[0] === 'void') ED.emit('focus-void', str); // the void window (void.js, Map > The Void) shows its field
 }
 
 // ---- the view ---------------------------------------------------------------------------------------------
@@ -310,6 +487,102 @@ const s2w = (x, y) => [(x - cv.width / 2) / S.view.scale + S.view.x, -(y - cv.he
 function evPos(e) {
   const r = cv.getBoundingClientRect();
   return [(e.clientX - r.left) * dpr, (e.clientY - r.top) * dpr];
+}
+
+// ---- the main views' contract (EDUX2): ED.views[id] = {id, title, el, pick, pickAt, project, ppm, overlay} -------
+// - pick(e): the world under a mouse event (anything with clientX, clientY) -> {w: [x, y], z, near, sx, sy, view}, or
+//   null where the view can't tell (the 3-D view until EDUX3): w the ground point, z its height where the view knows
+//   it (2-D: 0), sx, sy the view's canvas pixels (CSS pixels × dpr), near the metres one CSS pixel covers there (a hit
+//   within k pixels is one within k * near metres), view the view's id; pickAt(sx, sy) the same from canvas pixels
+// - project([x, y(, z)]) -> [sx, sy] in the same pixels (null behind the camera); without z the view takes the
+//   ground's height (2-D ignores z): project(pickAt(sx, sy).w) gives sx, sy back
+// - ppm(p): the canvas pixels a metre at the world point p (a radius drawn there)
+// - overlay: the 2-D context the view's handles and the tools' previews draw on (ED.previews), or null
+// The tools keep their (w, e) interface: the input pipeline below hands them the pick's w.
+const VIEW2D = {
+  id: '2d', title: '2-D', el: $('view2d'), canvas: cv, overlay: ctx,
+  pickAt(sx, sy) { return { w: s2w(sx, sy), z: 0, near: dpr / S.view.scale, sx, sy, view: '2d' }; },
+  pick(e) { const s = evPos(e); return this.pickAt(s[0], s[1]); },
+  project: p => w2s(p),
+  ppm: () => S.view.scale,
+};
+ED.views['2d'] = VIEW2D;
+// vpoly starts a path through the view v's projection (the 2-D poly's twin for previews). In a view that drapes (3-D:
+// v.drape) each edge is cut into steps of about a metre, so the line lies on the ground's heights.
+function vpoly(v, pts, close) {
+  const g = v.overlay;
+  g.beginPath();
+  let on = false;
+  const to = p => {
+    const s = v.project(p);
+    if (!s) { on = false; return; }
+    if (on) g.lineTo(s[0], s[1]); else g.moveTo(s[0], s[1]);
+    on = true;
+  };
+  const list = close && v.drape && pts.length > 2 ? pts.concat([pts[0]]) : pts;
+  list.forEach((p, i) => {
+    if (v.drape && i) { // the points between the last and this one, a metre apart (at most 400 an edge)
+      const a = list[i - 1], n = Math.min(400, Math.ceil(Math.hypot(p[0] - a[0], p[1] - a[1])));
+      for (let k = 1; k < n; k++) to([a[0] + (p[0] - a[0]) * k / n, a[1] + (p[1] - a[1]) * k / n]);
+    }
+    to(p);
+  });
+  if (close && !v.drape) g.closePath();
+}
+// vring starts a circle of r metres round the ground point c through the view v (2-D: an arc; 3-D: draped)
+function vring(v, c, r) {
+  if (!v.drape) {
+    const s = v.project(c);
+    v.overlay.beginPath();
+    if (s) v.overlay.arc(s[0], s[1], Math.max(0, r * v.ppm(c)), 0, 2 * Math.PI);
+    return;
+  }
+  const n = Math.max(16, Math.min(128, Math.ceil(2 * Math.PI * r)));
+  const pts = [];
+  for (let k = 0; k < n; k++) pts.push([c[0] + r * Math.cos(2 * Math.PI * k / n), c[1] + r * Math.sin(2 * Math.PI * k / n)]);
+  vpoly(v, pts, true);
+}
+// vmark draws a handle at the world point p through the view v: 'round' (a dot) or 'square', size CSS pixels across
+// its half, filled with fill. p = [x, y] stands on the ground; [x, y, z] at the height z (a handle above the ground).
+function vmark(v, p, shape, size, fill) {
+  const s = v.project(p), g = v.overlay;
+  if (!s) return null;
+  g.fillStyle = fill;
+  if (shape === 'round') { g.beginPath(); g.arc(s[0], s[1], size * dpr, 0, 2 * Math.PI); g.fill(); } else g.fillRect(s[0] - size * dpr, s[1] - size * dpr, 2 * size * dpr, 2 * size * dpr);
+  return s;
+}
+// the metres one CSS pixel covers at p in the view v (the handles' sizes on the ground)
+const vmpp = (v, p) => dpr / Math.max(1e-9, v.ppm(p));
+// vband strokes a band width metres wide along pts through the view v with the overlay's current strokeStyle (a
+// brush stroke, a path being drawn): 2-D one line of that width; 3-D (EDUX4) its outline draped on the ground (the
+// ground under it shows what the stroke does: the live preview)
+function vband(v, pts, width) {
+  const g = v.overlay;
+  g.save();
+  g.lineCap = g.lineJoin = 'round';
+  if (!v.drape || pts.length < 2) {
+    g.lineWidth = Math.max(1, width * v.ppm(pts[0] || [0, 0]));
+    vpoly(v, pts.length < 2 && pts.length ? [pts[0], pts[0]] : pts);
+    g.stroke();
+    g.restore();
+    return;
+  }
+  // 3-D: the band's outline on the ground (each leg's two sides, a ring round each end), so the ground it changes
+  // shows through it
+  const hw = width / 2;
+  g.lineWidth = 1.5 * dpr;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i], len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (len < 1e-6) continue;
+    const n = [-(b[1] - a[1]) / len * hw, (b[0] - a[0]) / len * hw];
+    for (const s of [1, -1]) { vpoly(v, [[a[0] + s * n[0], a[1] + s * n[1]], [b[0] + s * n[0], b[1] + s * n[1]]]); g.stroke(); }
+  }
+  for (const p of pts.length > 1 ? [pts[0], pts[pts.length - 1]] : pts) { vring(v, p, hw); g.stroke(); }
+  g.restore();
+}
+// vsquare starts the outline of a square of side 2h round the ground point c through the view v (draped in 3-D)
+function vsquare(v, c, hs) {
+  vpoly(v, [[c[0] - hs, c[1] - hs], [c[0] + hs, c[1] - hs], [c[0] + hs, c[1] + hs], [c[0] - hs, c[1] + hs]], true);
 }
 
 function poly(pts, mirror, close) {
@@ -423,6 +696,9 @@ function sameSel(a, b) { return a && b && JSON.stringify(a) === JSON.stringify(b
 function objSel(o) { return o.path ? { t: 'obj', path: o.path } : { t: 'auto', which: o.auto, idx: o.idx, lane: o.lane, tier: o.tier }; }
 
 function render() {
+  // another view shown (3-D): the hidden 2-D canvas isn't drawn; that view draws its frame and overlay instead (a
+  // switch back to 2-D draws it: setView -> resize)
+  if (ED.view !== '2d' && ED.active().redraw) { ED.active().redraw(); return; }
   const W = cv.width, H = cv.height;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = '#0f1114';
@@ -498,6 +774,7 @@ function render() {
       }
       ctx.restore();
     });
+    drawLaneExtras(VIEW2D); // the selected lane's corridor and its width handle (EDUX4)
   }
   ED.emit('draw', 'under'); // the props (props.js)
   if (S.show.objects) {
@@ -532,34 +809,151 @@ function render() {
   drawJoined();
   if (S.show.bots) drawBots();
   ED.emit('render', ctx); // a pane's own drawing (the ground's strokes and stamps, a tool's cursor)
-  if (S.drawing) drawDrawing();
-  ED.emit('draw', 'over'); // handles and ghosts (props.js)
-  if (S.show.findings && S.report) {
-    for (const f of S.report.findings || []) {
-      if (!f.at) continue;
-      const p = w2s(f.at), on = f === S.hoverFinding;
-      ctx.save();
-      ctx.strokeStyle = f.severity === 'warning' ? '#f2b84b' : '#ff6b6b';
-      ctx.lineWidth = (on ? 3 : 2) * dpr;
-      ctx.beginPath(); ctx.arc(p[0], p[1], (on ? 14 : 10) * dpr, 0, 2 * Math.PI); ctx.stroke();
-      ctx.fillStyle = ctx.strokeStyle;
-      ctx.font = `bold ${10 * dpr}px Segoe UI, sans-serif`;
-      ctx.fillText(f.rule, p[0] + 13 * dpr, p[1] - 9 * dpr);
-      for (const [k, part] of (f.parts || []).entries()) { // reach.dropped: every cut-off part (MAPED-EDIT6)
-        const c = w2s(part.centre), sel = S.sel && S.sel.t === 'part' && S.sel.k === k;
-        ctx.setLineDash([4 * dpr, 3 * dpr]);
-        ctx.lineWidth = (sel ? 3 : 1.5) * dpr;
-        ctx.beginPath(); ctx.arc(c[0], c[1], Math.max(6 * dpr, part.r * S.view.scale), 0, 2 * Math.PI); ctx.stroke();
-      }
-      ctx.restore();
+  ED.emit('draw', 'over'); // handles (props.js, propsel.js)
+  ED.drawPreviews(VIEW2D); // the tools' previews: the drawing in progress, the brushes, the ghosts, the estimate
+  if (S.show.findings && S.report) drawFindings(VIEW2D);
+}
+
+// drawFindings marks the check's findings at their places through the view v (a ring, the rule; a reach.dropped
+// finding's cut-off parts as dashed circles)
+function drawFindings(v) {
+  if (!S.show.findings || !S.report) return;
+  const g = v.overlay;
+  for (const f of S.report.findings || []) {
+    // EDUX6 (feedback.js): a finding whose place the page knows is marked on the object (where it is now) and its
+    // mirror twin, with the rule's reason
+    if (ED.markFinding && !(f.parts && f.parts.length) && ED.markFinding(v, f)) continue;
+    if (!f.at) continue;
+    const p = v.project(f.at), on = f === S.hoverFinding;
+    if (!p) continue;
+    g.save();
+    g.strokeStyle = f.severity === 'warning' ? '#f2b84b' : '#ff6b6b';
+    g.lineWidth = (on ? 3 : 2) * dpr;
+    g.beginPath(); g.arc(p[0], p[1], (on ? 14 : 10) * dpr, 0, 2 * Math.PI); g.stroke();
+    g.fillStyle = g.strokeStyle;
+    g.font = `bold ${10 * dpr}px Segoe UI, sans-serif`;
+    g.fillText(f.rule, p[0] + 13 * dpr, p[1] - 9 * dpr);
+    for (const [k, part] of (f.parts || []).entries()) { // reach.dropped: every cut-off part (MAPED-EDIT6)
+      const sel = S.sel && S.sel.t === 'part' && S.sel.k === k;
+      g.setLineDash([4 * dpr, 3 * dpr]);
+      g.lineWidth = (sel ? 3 : 1.5) * dpr;
+      vring(v, part.centre, Math.max(6 * vmpp(v, part.centre), part.r));
+      g.stroke();
     }
+    g.restore();
   }
 }
 
-// drawJoined outlines what a drag of the selected knot, well or camp takes along (or takes along now)
+// the selection's marks in a view other than the 2-D (EDUX3; the 2-D view's render() draws its own): a ring round the
+// selected object (dashed at its mirror), the selected shape's outline and handles, a knot's square, draped on the ground
+const MARK_R = { guardian: 10, locus: 6, shop: 4, binding: 4, core: 4, spawn: 2, well: 3, camp: 4, ward: 1.5 };
+ED.marks.push(function selectionMarks(v) {
+  const sel = S.sel, g = v.overlay;
+  if (!sel || !S.doc) return;
+  g.save();
+  g.strokeStyle = '#fff';
+  g.lineWidth = 2 * dpr;
+  if (sel.t === 'obj' || sel.t === 'auto') {
+    const o = objects().find(x => sameSel(objSel(x), sel));
+    if (o && S.show.objects) {
+      const r = Math.max(MARK_R[o.kind] || 3, 8 * vmpp(v, o.pos));
+      vring(v, o.pos, r); g.stroke();
+      if (S.show.mirror) { g.globalAlpha = 0.55; g.setLineDash([5 * dpr, 4 * dpr]); vring(v, mir(o.pos), r); g.stroke(); }
+    }
+  } else if (sel.t === 'knot') {
+    const p = getAt(S.doc, ['lanes', sel.l, 'knots', sel.k]);
+    if (isPt(p)) { vmark(v, p, 'square', 5, '#fff'); vring(v, p, 6 * vmpp(v, p)); g.stroke(); }
+  } else if (['shape', 'vertex', 'radius'].includes(sel.t)) {
+    const s = shapes()[sel.i];
+    if (s) {
+      if (isPt(s.circle)) vring(v, s.circle, +s.r || 0);
+      else if (Array.isArray(s.polygon)) vpoly(v, s.polygon.filter(isPt), true);
+      else if (Array.isArray(s.path)) vpoly(v, s.path.filter(isPt));
+      g.stroke();
+      for (const hd of shapeHandles(sel.i)) {
+        const on = sameSel({ t: hd.t, i: hd.i, v: hd.v }, sel) || (hd.t === 'radius' && sel.t === 'radius');
+        vmark(v, hd.pos, 'square', 4, on ? '#58a6ff' : '#fff');
+      }
+    }
+  }
+  g.restore();
+});
+
+// ---- the lanes in every view (EDUX4) ------------------------------------------------------------------------
+// laneWidthHandle: with a lane, a knot or the handle itself selected, a round handle beside the lane at the knot (a
+// lane: its middle knot), half the lane's width out to its left; a drag sets every lane's width (the Lanes tab's field)
+function laneWidthHandle() {
+  const s = S.sel;
+  if (!s || !['knot', 'lane', 'lwidth'].includes(s.t) || !S.show.lanes || !S.doc) return null;
+  const l = lanes()[s.l];
+  if (!l || !Array.isArray(l.knots) || l.knots.length < 2 || !l.knots.every(isPt)) return null;
+  const k = s.t === 'lane' ? Math.floor((l.knots.length - 1) / 2) : Math.min(s.k, l.knots.length - 1);
+  const a = l.knots[Math.max(0, k - 1)], b = l.knots[Math.min(l.knots.length - 1, k + 1)], len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+  const n = [-(b[1] - a[1]) / len, (b[0] - a[0]) / len], hw = (+l.width || 0) / 2, p = l.knots[k];
+  return { l: s.l, k, at: p, n, pos: [p[0] + n[0] * hw, p[1] + n[1] * hw] };
+}
+// laneEdges: the corridor's two sides (each leg offset by half the width), as pairs of points
+function laneEdges(l) {
+  const out = [], hw = (+l.width || 0) / 2;
+  for (let i = 1; i < l.knots.length; i++) {
+    const a = l.knots[i - 1], b = l.knots[i], len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, n = [-(b[1] - a[1]) / len * hw, (b[0] - a[0]) / len * hw];
+    out.push([[a[0] + n[0], a[1] + n[1]], [b[0] + n[0], b[1] + n[1]]], [[a[0] - n[0], a[1] - n[1]], [b[0] - n[0], b[1] - n[1]]]);
+  }
+  return out;
+}
+// drawLaneExtras: the selected lane's corridor sides (dashed) and the width handle, through the view v
+function drawLaneExtras(v) {
+  const hd = laneWidthHandle();
+  if (!hd) return;
+  const g = v.overlay, l = lanes()[hd.l];
+  g.save();
+  g.strokeStyle = LANE[l.id] || '#ccc';
+  g.globalAlpha = 0.8;
+  g.lineWidth = 1 * dpr;
+  g.setLineDash([5 * dpr, 4 * dpr]);
+  for (const e of laneEdges(l)) { vpoly(v, e); g.stroke(); }
+  g.setLineDash([]);
+  g.globalAlpha = 1;
+  vpoly(v, [hd.at, hd.pos]); g.stroke();
+  vmark(v, hd.pos, 'round', 5, S.sel.t === 'lwidth' ? '#58a6ff' : '#fff');
+  g.restore();
+}
+// the lanes through a view that drapes (3-D; the 2-D view's render() draws its own): each lane's line on the ground,
+// its knots, its direction of travel from team 1's base (the selected lane thicker), and the extras above
+ED.marks.push(function laneMarks(v) {
+  if (!v.drape || !S.show.lanes || !S.doc) return;
+  const g = v.overlay;
+  lanes().forEach((l, li) => {
+    if (!l || !Array.isArray(l.knots) || !l.knots.every(isPt)) return;
+    const col = LANE[l.id] || '#ccc';
+    g.save();
+    g.strokeStyle = col;
+    g.lineWidth = (S.sel && ['lane', 'lwidth'].includes(S.sel.t) && S.sel.l === li ? 3 : 1.5) * dpr;
+    vpoly(v, l.knots);
+    g.stroke();
+    l.knots.forEach(p => vmark(v, p, 'square', 3.5, col));
+    if (l.knots.length >= 2) { // the direction of travel, at the first leg's middle
+      const a = l.knots[0], b = l.knots[1], m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      const p = v.project(m), q = v.project([m[0] + (b[0] - a[0]) * 0.01, m[1] + (b[1] - a[1]) * 0.01]);
+      if (p && q) {
+        const ang = Math.atan2(q[1] - p[1], q[0] - p[0]), L = 8 * dpr;
+        g.fillStyle = col;
+        g.beginPath();
+        g.moveTo(p[0] + L * Math.cos(ang), p[1] + L * Math.sin(ang));
+        g.lineTo(p[0] + L * Math.cos(ang + 2.5), p[1] + L * Math.sin(ang + 2.5));
+        g.lineTo(p[0] + L * Math.cos(ang - 2.5), p[1] + L * Math.sin(ang - 2.5));
+        g.fill();
+      }
+    }
+    g.restore();
+  });
+  drawLaneExtras(v);
+});
+
+// drawJoined outlines what a drag of the selected knot, well or camp takesalong (or takes along now)
 function drawJoined() {
   let js = S.drag && S.drag.moved ? S.drag.joined : null;
-  if (!js && S.sel && $('optJoined').checked && (S.sel.t === 'knot' || (S.sel.t === 'obj' && ['wells', 'camps'].includes(S.sel.path[0])))) {
+  if (!js && S.sel && S.joined && (S.sel.t === 'knot' || (S.sel.t === 'obj' && ['wells', 'camps'].includes(S.sel.path[0])))) {
     js = joinedTo(S.sel);
   }
   if (!js || !js.length) return;
@@ -680,19 +1074,26 @@ function shapeHit(sh, w) {
   return false;
 }
 
-// hit returns what is under the screen point: {sel, mirrored}.
-function hit(sx, sy) {
-  const w = s2w(sx, sy), near = (p, px) => Math.hypot(w2s(p)[0] - sx, w2s(p)[1] - sy) <= px * dpr;
+// hit returns what is under a view's pick (or under the shown view's canvas point sx, sy): {sel, mirrored}. Handles,
+// objects and knots are hit on the screen through the view's project (within so many pixels), shapes and lanes at
+// the pick's world point.
+function hit(a, b) {
+  const pk = typeof a === 'number' ? ED.active().pickAt(a, b) : a;
+  if (!pk) return null;
+  const v = ED.views[pk.view] || VIEW2D, w = pk.w, sx = pk.sx, sy = pk.sy;
+  const near = (p, px) => { const s = v.project(p); return !!s && Math.hypot(s[0] - sx, s[1] - sy) <= px * dpr; };
   if (S.sel && ['shape', 'vertex', 'radius'].includes(S.sel.t)) {
     for (const hd of shapeHandles(S.sel.i)) if (near(hd.pos, 7)) return { sel: { t: hd.t, i: hd.i, v: hd.v } };
   }
-  for (const fn of ED.hitFirst) { const r = fn(sx, sy, w, near); if (r) return r; }
+  const lw = laneWidthHandle(); // the lanes' width (EDUX4)
+  if (lw && near(lw.pos, 8)) return { sel: { t: 'lwidth', l: lw.l, k: lw.k } };
+  for (const fn of ED.hitFirst) { const r = fn(sx, sy, w, near, pk); if (r) return r; }
   if (S.show.objects) {
     const obs = objects();
     for (const o of obs) if (near(o.pos, 9)) return { sel: objSel(o) };
     if (S.show.mirror) for (const o of obs) if (near(mir(o.pos), 9)) return { sel: objSel(o), mirrored: true };
   }
-  for (const fn of ED.hitItems) { const r = fn(sx, sy, w, near); if (r) return r; }
+  for (const fn of ED.hitItems) { const r = fn(sx, sy, w, near, pk); if (r) return r; }
   if (S.show.lanes) {
     const L = lanes();
     for (let li = 0; li < L.length; li++) {
@@ -715,22 +1116,57 @@ function hit(sx, sy) {
   return null;
 }
 
+// snapW rounds a point the mouse gives: to 1 m with Shift or Tools > Snap to 1 m, else to 0.1 m (the grid snap; the
+// doodads' tools and the brush strokes use it)
 function snapW(w, e) {
-  if ((e && e.shiftKey) || $('optSnap').checked) return [Math.round(w[0]), Math.round(w[1])];
+  if ((e && e.shiftKey) || S.snap) return [Math.round(w[0]), Math.round(w[1])];
   return [r1(w[0]), r1(w[1])];
 }
+// smartW is snapW with the labelled snaps (EDUX6, feedback.js: the mirror line, a lane's edge, a midpoint, the grid)
+// for a point the mouse places (e: its event): a drawing's corners, + Well, + Camp, + Ward spot. e.exact: the point as
+// it is (typed); no event (a script's point): snapW only
+function smartW(w, e) {
+  if (e && e.exact) return [r1(w[0]), r1(w[1])];
+  if (ED.snapAt && e) { const s = ED.snapAt(w, e); if (s) return s.p; }
+  return snapW(w, e);
+}
 
-// moveSel applies a drag: the world delta d from the drag's start, on the values as they were then.
+// moveSel applies a drag: the world delta d from the drag's start, on the values as they were then. The delta goes
+// through the labelled snaps first (ED.snapDrag: the dragged point snapped as a whole, so a shape keeps its form);
+// e.fixedD gives the delta itself (a typed value, a refused step's last good one: feedback.js)
 function moveSel(drag, w, e) {
-  const sel = drag.sel, d0 = [w[0] - drag.start[0], w[1] - drag.start[1]];
+  const sel = drag.sel;
+  let d0 = w ? [w[0] - drag.start[0], w[1] - drag.start[1]] : [0, 0];
+  drag.snap = null;
+  if (e && e.fixedD) d0 = e.fixedD.slice();
+  else if (ED.snapDrag) d0 = ED.snapDrag(drag, d0, e) || d0;
+  drag.d0 = d0;
   const d = drag.mirrored ? mir(d0) : d0;
-  const orig = drag.orig;
-  const at = p => snapW([p[0] + d[0], p[1] + d[1]], e);
+  const orig = drag.orig, ge = drag.snap || (e && e.fixedD && e.exact) ? null : e; // a snapped point isn't rounded off it
+  const at = p => snapW([p[0] + d[0], p[1] + d[1]], ge);
   switch (sel.t) {
     case 'obj': setPoint(sel.path, at(orig)); break;
     case 'knot': setPoint(['lanes', sel.l, 'knots', sel.k], at(orig)); break;
     case 'vertex': { const s = shapes()[sel.i]; (s.polygon || s.path)[sel.v] = at(orig); break; }
-    case 'radius': { const s = shapes()[sel.i]; s.r = Math.max(1, r1(Math.hypot(w[0] - s.circle[0], w[1] - s.circle[1]))); break; }
+    case 'radius': { // e.r: a typed radius
+      const s = shapes()[sel.i];
+      s.r = e && e.r ? e.r : w ? Math.max(1, r1(Math.hypot(w[0] - s.circle[0], w[1] - s.circle[1]))) : orig.r;
+      break;
+    }
+    case 'lwidth': { // the lanes' width: twice the mouse's distance from the knot across the lane (half metres; Shift or
+      // Snap: metres), kept within the check's 6 to 80 m (EDUX6: what the mouse asks for is drag.want, drawn red past it)
+      const hd = laneWidthHandle();
+      if (!hd) break;
+      let want = e && e.width ? e.width : +orig.width || 24;
+      if (w && !(e && e.width)) {
+        const off = Math.abs((w[0] - hd.at[0]) * hd.n[0] + (w[1] - hd.at[1]) * hd.n[1]), q = (e && e.shiftKey) || S.snap ? 1 : 2;
+        want = Math.round(2 * off * q) / q;
+      }
+      drag.want = want;
+      const width = Math.min(LANE_MAX, Math.max(LANE_MIN, want));
+      lanes().forEach(l => { if (l) l.width = width; });
+      break;
+    }
     case 'shape': {
       const s = shapes()[sel.i];
       if (isPt(orig.circle)) s.circle = at(orig.circle);
@@ -751,7 +1187,8 @@ function moveSel(drag, w, e) {
 function startMove(drag) {
   const v = drag.sel.t === 'shape' ? shapes()[drag.sel.i] : selValue(drag.sel);
   drag.orig = JSON.parse(JSON.stringify(v));
-  drag.joined = $('optJoined').checked ? joinedTo(drag.sel) : [];
+  drag.joined = S.joined ? joinedTo(drag.sel) : [];
+  if (ED.dragStart) ED.dragStart(drag); // feedback.js: what the drag's refusals compare with
 }
 
 // ---- what a drag takes along (MAPED-EDIT6) ------------------------------------------------------------------
@@ -855,50 +1292,66 @@ function beginDrag(h, w) {
   return { sel, mirrored: !!h.mirrored, start: w, orig: null, moved: false };
 }
 
-cv.addEventListener('mousedown', e => {
-  if (!S.doc) return;
-  cv.focus();
-  const [sx, sy] = evPos(e), w = s2w(sx, sy);
-  if (e.button === 1 || e.button === 2 || (e.button === 0 && e.altKey)) {
-    S.pan = { sx, sy, x: S.view.x, y: S.view.y };
-    e.preventDefault();
-    return;
+// ---- the input pipeline (EDUX2): one set of mouse handlers for every view ---------------------------------------
+// A view's own handlers keep its camera (2-D: the right, middle and Alt + left drags, the wheel's zoom) and send the
+// rest here: inputDown(v, e) on a left press, inputDbl(v, e) on a double-click, inputWheel(v, e) before the wheel
+// zooms. The window's mousemove and mouseup follow the view that took the press (S.press), else the shown one. Each
+// works on the view's pick: S.mouseW and hit() follow the view, and the tools keep their (w, e) interface. A view
+// whose pick gives null (the 3-D view until EDUX3) takes no press: inputDown returns false and its camera moves.
+function inputDown(v, e) {
+  if (!S.doc || e.button !== 0) return false;
+  const pk = v.pick(e);
+  if (!pk) return false;
+  S.press = v.id;
+  S.near = pk.near;
+  const w = pk.w;
+  if (ED.pressed) ED.pressed(e); // feedback.js: a press ends what a typed value would still change
+  if (S.tool === 'shape') { // a cliff: the brush strokes, the other draw modes draw a shape
+    if (S.draw === 'brush') { S.stroke = { pts: [snapW(w, e)] }; render(); return true; }
+    drawDown(w, e);
+    return true;
   }
-  if (e.button !== 0) return;
-  if (S.tool === 'shape') return drawDown(w, e);
-  if (ED.tools[S.tool] && ED.tools[S.tool].down) return ED.tools[S.tool].down(w, e);
-  if (S.tool === 'well' || S.tool === 'camp') {
-    const p = snapW(w, e);
+  if (ED.tools[S.tool] && ED.tools[S.tool].down) { ED.tools[S.tool].down(w, e); return true; }
+  if (S.tool === 'well' || S.tool === 'camp' || S.tool === 'ward') { // the Units tab's + Well, + Mine, + Camp, + Ward spot
+    const p = smartW(w, e), list = { well: 'wells', camp: 'camps', ward: 'wards' }[S.tool];
+    if (ED.refusePlace && ED.refusePlace(S.tool, p)) return true; // feedback.js: on a wall, past the edge, team 2's half
+    const item = S.tool === 'camp' ? { kind: 'camp', noun: '', pos: p } : S.tool === 'well' && S.wellKind === 'mine' ? { kind: 'mine', pos: p } : { pos: p };
     edit(d => {
-      if (S.tool === 'well') { d.wells = Array.isArray(d.wells) ? d.wells : []; d.wells.push({ pos: p }); select({ t: 'obj', path: ['wells', d.wells.length - 1, 'pos'] }); }
-      else { d.camps = Array.isArray(d.camps) ? d.camps : []; d.camps.push({ kind: 'camp', noun: '', pos: p }); select({ t: 'obj', path: ['camps', d.camps.length - 1, 'pos'] }); }
+      d[list] = Array.isArray(d[list]) ? d[list] : [];
+      d[list].push(item);
+      select({ t: 'obj', path: [list, d[list].length - 1, 'pos'] });
     });
-    return;
+    return true;
   }
-  const h = hit(sx, sy);
-  for (const fn of ED.down) if (fn(h, e, w)) return;
+  const h = hit(pk);
+  for (const fn of ED.down) if (fn(h, e, w, pk)) return true;
   select(h ? h.sel : null);
   if (h) S.drag = beginDrag(h, w);
-});
-window.addEventListener('mousemove', e => {
+  return true;
+}
+function inputMove(e) {
   if (!S.doc) return;
-  const [sx, sy] = evPos(e), w = s2w(sx, sy);
-  $('coords').textContent = `x ${w[0].toFixed(1)}  y ${w[1].toFixed(1)}  (x+y ${(w[0] + w[1]).toFixed(1)})`;
-  S.mouseW = w;
+  const v = (S.press && ED.views[S.press]) || ED.active(), pk = v.pick(e);
+  S.mouseW = pk ? pk.w : null;
+  if (pk) S.near = pk.near;
+  if (pk) ED.emit('cursor', pk.w); // the status bar's first part (frame.js)
   if (ED.tools[S.tool] && ED.tools[S.tool].hover && !S.pan && !S.drawing) render();
-  if (S.pan) {
-    S.fitted = false;
-    S.view.x = S.pan.x - (sx - S.pan.sx) / S.view.scale;
-    S.view.y = S.pan.y + (sy - S.pan.sy) / S.view.scale;
+  if (S.pan) return pan2d(e);
+  if (!pk) return;
+  const w = pk.w;
+  if (S.grab) { S.grab.move(w, e); return; } // propsel.js: the selection box
+  if (S.drawing) { S.drawing.mouse = smartW(w, e); if (S.drawing.down) drawMove(w, e); render(); return; }
+  if (S.stroke) { // the cliff brush's stroke: a point every eighth of the brush
+    const last = S.stroke.pts[S.stroke.pts.length - 1];
+    if (Math.hypot(w[0] - last[0], w[1] - last[1]) >= Math.max(0.3, S.brush.size / 8)) S.stroke.pts.push(snapW(w, e));
     render();
     return;
   }
-  if (S.grab) { S.grab.move(w, e); return; } // propsel.js: the selection box
+  if (S.tool === 'shape' && S.draw === 'brush') { render(); return; } // the brush's outline follows the mouse
   if (ED.tools[S.tool] && ED.tools[S.tool].move) { ED.tools[S.tool].move(w, e); return; } // ground.js: paint, stamp
-  if (S.drawing) { S.drawing.mouse = snapW(w, e); if (S.drawing.down) drawMove(w, e); render(); return; }
   if (S.drag && (e.buttons & 1)) {
     if (!S.drag.moved) {
-      if (Math.hypot(w[0] - S.drag.start[0], w[1] - S.drag.start[1]) * S.view.scale < 3 * dpr) return;
+      if (Math.hypot(w[0] - S.drag.start[0], w[1] - S.drag.start[1]) < 3 * pk.near) return; // 3 pixels
       if (S.drag.sel.t === 'auto') { // the derived places become explicit, then this one moves
         pushUndo();
         if (!materialize(S.drag.sel.which)) { log('no derived places yet: wait for the check', 'err'); S.drag = null; return; }
@@ -911,21 +1364,87 @@ window.addEventListener('mousemove', e => {
       startMove(S.drag);
     }
     moveSel(S.drag, w, e);
+    if (ED.dragCheck) ED.dragCheck(S.drag, w, e); // feedback.js: a hard rule break is refused (the last good step stays)
     changed(true);
   }
-});
-window.addEventListener('mouseup', () => {
+}
+function inputUp() {
+  S.press = null;
   if (S.pan) { S.pan = null; return; }
   if (S.grab) { const g = S.grab; S.grab = null; g.up(); return; }
-  if (ED.tools[S.tool] && ED.tools[S.tool].up) { ED.tools[S.tool].up(); return; }
   if (S.drawing && S.drawing.down) return drawUp();
-  if (S.drag && S.drag.moved) scheduleCheck();
+  if (S.stroke) return cliffStrokeEnd();
+  if (ED.tools[S.tool] && ED.tools[S.tool].up) { ED.tools[S.tool].up(); return; }
+  if (S.drag && S.drag.moved) { scheduleCheck(); if (ED.dragEnd) ED.dragEnd(S.drag); }
   S.drag = null;
+}
+// inputWheel offers the wheel to the armed tool (props.js: Ctrl+wheel sizes, Shift+wheel turns the next doodad);
+// true when it took it (the view then doesn't zoom)
+// then to the parts' ED.wheels (props.js: Alt+wheel, the selected doodads' height). Alt+wheel never zooms.
+function inputWheel(v, e) {
+  if (!S.doc) return false;
+  const tool = ED.tools[S.tool];
+  if (tool && tool.wheel) {
+    const pk = v.pick(e);
+    if (pk && tool.wheel(e, pk.w)) { render(); return true; }
+  }
+  for (const fn of ED.wheels) if (fn(e)) { render(); return true; }
+  return !!e.altKey;
+}
+function inputDbl(v, e) {
+  if (S.drawing) { drawFinish(); return true; }
+  const pk = v.pick(e);
+  if (!pk) return false;
+  const h = hit(pk);
+  if (h && h.sel.t === 'shape') { // a polygon or path gets a vertex where it's double-clicked
+    const s = shapes()[h.sel.i], pts = s.polygon || s.path;
+    if (!Array.isArray(pts)) return true;
+    const w = snapW(pk.w);
+    let best = 0, bd = Infinity;
+    const n = s.polygon ? pts.length : pts.length - 1;
+    for (let i = 0; i < n; i++) { const d = distSeg(w, pts[i], pts[(i + 1) % pts.length]); if (d < bd) { bd = d; best = i; } }
+    edit(() => pts.splice(best + 1, 0, w));
+    select({ t: 'vertex', i: h.sel.i, v: best + 1 });
+  }
+  return true;
+}
+ED.input = { down: inputDown, dbl: inputDbl, wheel: inputWheel, move: inputMove, up: inputUp };
+window.addEventListener('mousemove', inputMove);
+window.addEventListener('mouseup', inputUp);
+
+// the 2-D view's own mouse: the camera (right or middle drag pans, the World Editor's; Shift + right drag zooms; Alt +
+// left drag pans; the wheel zooms about the mouse); the left button goes to the pipeline
+cv.addEventListener('mousedown', e => {
+  if (!S.doc) return;
+  cv.focus();
+  if (e.button === 1 || e.button === 2 || (e.button === 0 && e.altKey)) {
+    const [sx, sy] = evPos(e);
+    S.pan = { sx, sy, x: S.view.x, y: S.view.y, zoom: e.button === 2 && e.shiftKey, scale: S.view.scale, w: s2w(sx, sy) };
+    e.preventDefault();
+    return;
+  }
+  inputDown(VIEW2D, e);
 });
+function pan2d(e) {
+  const [sx, sy] = evPos(e);
+  S.fitted = false;
+  if (S.pan.zoom) { // Shift + right drag: up zooms in, about the point the drag started at
+    S.view.scale = Math.max(0.05, S.pan.scale * Math.exp(-(sy - S.pan.sy) * 0.01 / dpr));
+    const ps = w2s(S.pan.w);
+    S.view.x += (ps[0] - S.pan.sx) / S.view.scale;
+    S.view.y -= (ps[1] - S.pan.sy) / S.view.scale;
+    render();
+    return;
+  }
+  S.view.x = S.pan.x - (sx - S.pan.sx) / S.view.scale;
+  S.view.y = S.pan.y + (sy - S.pan.sy) / S.view.scale;
+  render();
+}
 cv.addEventListener('contextmenu', e => e.preventDefault());
 cv.addEventListener('wheel', e => {
   if (!S.doc) return;
   e.preventDefault();
+  if (inputWheel(VIEW2D, e)) return;
   const [sx, sy] = evPos(e), w = s2w(sx, sy);
   S.fitted = false;
   S.view.scale *= Math.exp(-e.deltaY * 0.0015);
@@ -934,33 +1453,57 @@ cv.addEventListener('wheel', e => {
   S.view.y += w[1] - w2[1];
   render();
 }, { passive: false });
-cv.addEventListener('dblclick', e => {
-  if (S.drawing) return drawFinish();
-  const [sx, sy] = evPos(e);
-  const h = hit(sx, sy);
-  if (h && h.sel.t === 'shape') { // a polygon or path gets a vertex where it's double-clicked
-    const s = shapes()[h.sel.i], pts = s.polygon || s.path;
-    if (!Array.isArray(pts)) return;
-    const w = snapW(s2w(sx, sy));
-    let best = 0, bd = Infinity;
-    const n = s.polygon ? pts.length : pts.length - 1;
-    for (let i = 0; i < n; i++) { const d = distSeg(w, pts[i], pts[(i + 1) % pts.length]); if (d < bd) { bd = d; best = i; } }
-    edit(() => pts.splice(best + 1, 0, w));
-    select({ t: 'vertex', i: h.sel.i, v: best + 1 });
-  }
-});
+cv.addEventListener('dblclick', e => inputDbl(VIEW2D, e));
 
 function autoToPath(sel) {
   if (sel.which === 'cores') return { t: 'obj', path: ['base', 'cores', sel.idx] };
   return { t: 'obj', path: ['base', 'bindings', String(sel.lane), sel.tier] };
 }
 
-// ---- drawing new shapes -----------------------------------------------------------------------------------
+// ---- drawing: one draw mode for textures and cliffs -----------------------------------------------------------
+// The Terrain tab draws a material (a texture layer: the 'paint' tool, ground.js; a cliff kind: the 'shape' tool) with
+// one shared draw mode S.draw: 'brush' (a stroke of S.brush's size and shape), 'polygon' (click corners; double-click
+// or Enter ends), 'circle' (press at the centre, drag the radius) or 'path' (click points; its width the brush size).
+// Picking a material never changes the draw mode, and picking a draw mode keeps the material.
 
-function newType() { return document.querySelector('input[name=stype]:checked').value; }
-function newGeom() { return document.querySelector('input[name=sgeom]:checked').value; }
+// the Terrain tab's Apply Cliff kind; Water is a chasm with water in its dip
+function newType() { return S.cliff === 'water' ? 'chasm' : S.cliff; }
+function newGeom() { return S.draw === 'brush' ? 'circle' : S.draw; } // the geometry a click-drawn shape takes
+function newShape(sh) { // a drawn shape of the armed kind
+  const s = Object.assign({ type: newType() }, sh);
+  if (S.cliff === 'water') s.water = true;
+  return s;
+}
+const DRAW_NAMES = { brush: 'Brush', polygon: 'Polygon', circle: 'Circle', path: 'Path' };
+// drawLabel is the draw mode for the status bar ("Brush 8 m", "Polygon", "Path 8 m")
+function drawLabel() {
+  const b = S.brush;
+  return S.draw === 'brush' ? `Brush ${b.size} m${b.shape === 'square' ? ' square' : ''}` : S.draw === 'path' ? `Path ${b.size} m` : DRAW_NAMES[S.draw];
+}
+// setCliff picks a cliff kind as the material (Terrain > Apply Cliff): the shape tool, the draw mode kept
+function setCliff(kind) {
+  if (kind) S.cliff = kind;
+  S.drawing = null;
+  setTool('shape');
+}
+// setMaterial picks what the pen applies (the Terrain tab's Texture | Cliff switch): 'paint' (a texture layer: Apply
+// Texture) or 'shape' (a cliff kind: Apply Cliff); it arms that material's tool and keeps the draw mode, and the tab
+// then shows only that material's list. S.lastMaterial remembers it across Select and the other tabs.
+function setMaterial(m) {
+  if (m === 'paint' && ED.tools.paint) setTool('paint');
+  else if (m === 'shape') setCliff();
+}
+// setDraw picks the draw mode (Terrain > Draw with); a material's tool stays (or comes back from Select)
+function setDraw(mode) {
+  if (!DRAW_NAMES[mode]) return;
+  S.draw = mode;
+  S.drawing = null;
+  S.stroke = null;
+  setTool(S.tool === 'paint' || S.tool === 'shape' ? S.tool : (S.lastMaterial === 'paint' && ED.tools.paint ? 'paint' : 'shape'));
+}
 function drawDown(w, e, geom) {
-  const p = snapW(w, e), g = geom || newGeom();
+  const p = smartW(w, e), g = geom || newGeom();
+  if (ED.refuseCorner && ED.refuseCorner(p, g)) { render(); return; } // feedback.js: a polygon's corner that crosses it
   if (g === 'circle') { S.drawing = { geom: g, center: p, r: 0, down: true, mouse: p }; return; }
   if (!S.drawing) S.drawing = { geom: g, pts: [], mouse: p };
   S.drawing.pts.push(p);
@@ -975,7 +1518,7 @@ function drawUp() {
   if (d.geom === 'circle') {
     S.drawing = null;
     if (d.r < 1) { render(); return; }
-    addShape({ type: newType(), circle: d.center, r: d.r });
+    commitDrawn({ circle: d.center, r: d.r });
   }
 }
 function drawFinish() {
@@ -984,26 +1527,64 @@ function drawFinish() {
   S.drawing = null;
   // a double-click adds its point twice
   const pts = d.pts.filter((p, i) => !i || Math.hypot(p[0] - d.pts[i - 1][0], p[1] - d.pts[i - 1][1]) > 0.05);
+  if (d.geom === 'polygon' && ED.refuseClose && ED.refuseClose(pts)) { d.pts = pts; S.drawing = d; render(); return; } // feedback.js: its closing edge crosses it
   if (ED.tools[S.tool] && ED.tools[S.tool].finish) { ED.tools[S.tool].finish(pts); render(); return; }
-  if (d.geom === 'polygon' && pts.length >= 3) addShape({ type: newType(), polygon: pts });
-  else if (d.geom === 'path' && pts.length >= 2) addShape({ type: newType(), path: pts, width: 12 });
+  let done = true;
+  if (d.geom === 'polygon' && pts.length >= 3) done = commitDrawn({ polygon: pts });
+  else if (d.geom === 'path' && pts.length >= 2) done = commitDrawn({ path: pts, width: r1(Math.max(1, S.brush.size)) });
   else render();
+  if (done === false) { d.pts = pts; S.drawing = d; render(); } // refused (feedback.js): the drawing stays to be mended
 }
-function drawDrawing() {
+// commitDrawn hands a drawn geometry to the tool's drawn(sh) (a texture layer's mask: ground.js), else adds it as a
+// cliff shape: one on team 2's half (its box's centre past the line) is mirrored onto team 1's (symmetry.half)
+function commitDrawn(sh) {
+  const t = ED.tools[S.tool];
+  if (t && t.drawn) { t.drawn(sh); render(); return; }
+  const s = asBush(newShape(toTeam1(sh)));
+  if (ED.refuseShapes && ED.refuseShapes([s])) { render(); return false; } // feedback.js: an object it would wall in
+  addShape(s);
+  return true;
+}
+function shapePts(sh) { return sh.circle ? [sh.circle] : sh.polygon || sh.path || []; }
+function toTeam1(sh) {
+  const ps = shapePts(sh);
+  if (!ps.length) return sh;
+  const xs = ps.map(p => p[0]), ys = ps.map(p => p[1]);
+  if ((Math.min(...xs) + Math.max(...xs)) / 2 + (Math.min(...ys) + Math.max(...ys)) / 2 <= 0) return sh;
+  const m = Object.assign({}, sh);
+  if (sh.circle) m.circle = mir(sh.circle);
+  if (sh.polygon) m.polygon = sh.polygon.map(mir);
+  if (sh.path) m.path = sh.path.map(mir);
+  return m;
+}
+// the drawing in progress (a polygon, circle or path of the draw mode), through the view v (a preview)
+function drawDrawing(v) {
   const d = S.drawing;
-  ctx.save();
-  ctx.strokeStyle = '#fff';
-  ctx.setLineDash([4 * dpr, 3 * dpr]);
-  ctx.lineWidth = 1.5 * dpr;
+  if (!d) return;
+  const g = v.overlay;
+  g.save();
+  g.strokeStyle = '#fff';
+  g.setLineDash([4 * dpr, 3 * dpr]);
+  g.lineWidth = 1.5 * dpr;
   if (d.geom === 'circle') {
-    const c = w2s(d.center);
-    ctx.beginPath(); ctx.arc(c[0], c[1], d.r * S.view.scale, 0, 2 * Math.PI); ctx.stroke();
+    vring(v, d.center, d.r); // draped in 3-D
+    g.stroke();
   } else {
-    poly(d.pts.concat(d.mouse ? [d.mouse] : []), false, d.geom === 'polygon');
-    ctx.stroke();
+    const pts = d.pts.concat(d.mouse ? [d.mouse] : []);
+    if (d.geom === 'path' && S.tool === 'shape' && pts.length > 1) { // the path's band at the brush's width
+      g.save();
+      g.setLineDash([]);
+      g.globalAlpha = v.drape ? 0.9 : 0.35;
+      g.strokeStyle = (TYPE[newType()] || TYPE.open)[1];
+      vband(v, pts, Math.max(1, S.brush.size));
+      g.restore();
+    }
+    vpoly(v, pts, d.geom === 'polygon');
+    g.stroke();
   }
-  ctx.restore();
+  g.restore();
 }
+ED.previews.push(drawDrawing);
 function addShape(sh) {
   edit(d => {
     d.terrain = d.terrain && typeof d.terrain === 'object' ? d.terrain : { default: 'wall' };
@@ -1013,23 +1594,235 @@ function addShape(sh) {
   select({ t: 'shape', i: shapes().length - 1 });
 }
 
+// ---- the cliff brush: a stroke of the brush becomes terrain shapes of the kind ----------------------------------
+// A click is a dab (a circle of the brush's size, the square brush a square polygon); a drag a path of its width,
+// thinned (simplifyPts, as the ground's strokes are). The stroke is split where it crosses the mirror line (x + y = 0)
+// and each piece on team 2's half is mirrored onto team 1's, so every piece passes symmetry.half and the compiler's
+// mirrors show the stroke as drawn. One undo step a stroke.
+function simplifyPts(pts, tol) { // Douglas-Peucker
+  if (pts.length < 3) return pts.slice();
+  let best = -1, bd = tol;
+  for (let i = 1; i < pts.length - 1; i++) { const d = distSeg(pts[i], pts[0], pts[pts.length - 1]); if (d > bd) { bd = d; best = i; } }
+  if (best < 0) return [pts[0], pts[pts.length - 1]];
+  return simplifyPts(pts.slice(0, best + 1), tol).slice(0, -1).concat(simplifyPts(pts.slice(best), tol));
+}
+function brushDab(c, size, square) {
+  const p = c[0] + c[1] > 0 ? mir(c) : c, hs = size / 2;
+  if (square) return { polygon: [[r1(p[0] - hs), r1(p[1] - hs)], [r1(p[0] + hs), r1(p[1] - hs)], [r1(p[0] + hs), r1(p[1] + hs)], [r1(p[0] - hs), r1(p[1] + hs)]] };
+  return { circle: [r1(p[0]), r1(p[1])], r: r1(hs) };
+}
+function cliffStrokeShapes(pts) {
+  const size = Math.max(1, +S.brush.size || 8), square = S.brush.shape === 'square';
+  const span = Math.max(...pts.map(p => Math.hypot(p[0] - pts[0][0], p[1] - pts[0][1])));
+  if (pts.length < 2 || span < size / 4) return [brushDab(pts[0], size, square)];
+  const pieces = [];
+  let cur = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i], sa = a[0] + a[1], sb = b[0] + b[1];
+    if ((sa > 0) !== (sb > 0) && sa !== sb) { // crosses the mirror line: split at the crossing
+      const t = sa / (sa - sb), c = [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
+      cur.push(c);
+      pieces.push(cur);
+      cur = [c];
+    }
+    cur.push(b);
+  }
+  pieces.push(cur);
+  const out = [];
+  for (const pc of pieces) {
+    const len = pc.slice(1).reduce((s, p, i) => s + Math.hypot(p[0] - pc[i][0], p[1] - pc[i][1]), 0);
+    if (len < 0.5) continue;
+    const mid = pc.reduce((s, p) => s + p[0] + p[1], 0) / pc.length;
+    const q = simplifyPts(mid > 0 ? pc.map(mir) : pc, Math.max(0.15, size / 20)).map(p => [r1(p[0]), r1(p[1])]);
+    out.push({ path: q.filter((p, i) => !i || p[0] !== q[i - 1][0] || p[1] !== q[i - 1][1]), width: r1(size) });
+  }
+  return out.filter(s => s.path.length >= 2);
+}
+// ---- a bush drawn as a band: its outline -----------------------------------------------------------------------
+// A bush is a circle or a polygon (the compiler's terrain.shape rule: the game outlines a bush's grass), so a bush's
+// Brush stroke or Path (a band: a path of a width) is written as the band's outline: the band laid on a grid of
+// cells of about w/8 m (at most 400 000 cells), holes filled, cells touching only at a corner joined, the largest piece
+// kept, its edge traced round (counter-clockwise) and thinned (Douglas-Peucker on the closed outline) as far as it
+// stays a polygon that doesn't cross itself.
+function segsHit(a, b, c, d) {
+  const o = (p, q, r) => Math.sign((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]));
+  const on = (p, q, r) => Math.min(p[0], q[0]) <= r[0] && r[0] <= Math.max(p[0], q[0]) && Math.min(p[1], q[1]) <= r[1] && r[1] <= Math.max(p[1], q[1]);
+  const o1 = o(a, b, c), o2 = o(a, b, d), o3 = o(c, d, a), o4 = o(c, d, b);
+  if (o1 !== o2 && o3 !== o4) return true;
+  return (!o1 && on(a, b, c)) || (!o2 && on(a, b, d)) || (!o3 && on(c, d, a)) || (!o4 && on(c, d, b));
+}
+function polyCrosses(ps) { // two edges of the closed polygon ps that aren't neighbours meet
+  const n = ps.length;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue;
+      if (segsHit(ps[i], ps[(i + 1) % n], ps[j], ps[(j + 1) % n])) return true;
+    }
+  }
+  return false;
+}
+function bandOutline(path, w) {
+  const r = w / 2, xs = path.map(p => p[0]), ys = path.map(p => p[1]);
+  const x0 = Math.min(...xs) - r, y0 = Math.min(...ys) - r, x1 = Math.max(...xs) + r, y1 = Math.max(...ys) + r;
+  const c = Math.max(Math.min(1, Math.max(0.2, w / 8)), Math.sqrt((x1 - x0) * (y1 - y0) / 4e5));
+  const ox = x0 - c, oy = y0 - c, nx = Math.ceil((x1 - x0) / c) + 2, ny = Math.ceil((y1 - y0) / c) + 2;
+  const at = (i, j) => j * nx + i;
+  let g = new Uint8Array(nx * ny); // 1: in the band (the border ring of cells stays out)
+  for (let k = 1; k < path.length; k++) {
+    const a = path[k - 1], b = path[k];
+    const i0 = Math.max(1, Math.floor((Math.min(a[0], b[0]) - r - ox) / c)), i1 = Math.min(nx - 2, Math.ceil((Math.max(a[0], b[0]) + r - ox) / c));
+    const j0 = Math.max(1, Math.floor((Math.min(a[1], b[1]) - r - oy) / c)), j1 = Math.min(ny - 2, Math.ceil((Math.max(a[1], b[1]) + r - oy) / c));
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      if (!g[at(i, j)] && distSeg([ox + (i + 0.5) * c, oy + (j + 0.5) * c], a, b) <= r) g[at(i, j)] = 1;
+    }
+  }
+  const flood = (from, ok) => { // the cells 4-connected to from where ok(cell), as a list
+    const seen = new Uint8Array(nx * ny), out = [from], st = [from];
+    seen[from] = 1;
+    while (st.length) {
+      const q = st.pop(), i = q % nx, j = (q - i) / nx;
+      for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const ii = i + di, jj = j + dj, n = at(ii, jj);
+        if (ii < 0 || jj < 0 || ii >= nx || jj >= ny || seen[n] || !ok(n)) continue;
+        seen[n] = 1; out.push(n); st.push(n);
+      }
+    }
+    return out;
+  };
+  for (let round = 0; round < 8; round++) {
+    const outside = new Uint8Array(nx * ny); // holes filled: what the border's outside cells don't reach is in
+    for (const n of flood(0, n => !g[n])) outside[n] = 1;
+    for (let n = 0; n < g.length; n++) g[n] = outside[n] ? 0 : 1;
+    let joined = 0; // two cells in touching only at a corner: the cell beside them taken in
+    for (let j = 0; j + 1 < ny; j++) for (let i = 0; i + 1 < nx; i++) {
+      const a = g[at(i, j)], b = g[at(i + 1, j)], d = g[at(i, j + 1)], e = g[at(i + 1, j + 1)];
+      if (a && e && !b && !d) { g[at(i + 1, j)] = 1; joined++; } else if (b && d && !a && !e) { g[at(i, j)] = 1; joined++; }
+    }
+    if (!joined) break;
+  }
+  let best = [];
+  const done = new Uint8Array(nx * ny);
+  for (let n = 0; n < g.length; n++) {
+    if (!g[n] || done[n]) continue;
+    const part = flood(n, m => g[m] === 1);
+    part.forEach(m => { done[m] = 1; });
+    if (part.length > best.length) best = part;
+  }
+  if (!best.length) return null;
+  const keep = new Uint8Array(nx * ny);
+  best.forEach(m => { keep[m] = 1; });
+  // the edge: each cell's sides towards out, counter-clockwise (the band on the left), corner (i, j) to the next
+  const nxt = new Map(), V = (i, j) => j * (nx + 1) + i, inn = (i, j) => i >= 0 && j >= 0 && i < nx && j < ny && keep[at(i, j)];
+  let start = -1;
+  for (const m of best) {
+    const i = m % nx, j = (m - i) / nx;
+    if (!inn(i, j - 1)) nxt.set(V(i, j), V(i + 1, j));
+    if (!inn(i + 1, j)) nxt.set(V(i + 1, j), V(i + 1, j + 1));
+    if (!inn(i, j + 1)) nxt.set(V(i + 1, j + 1), V(i, j + 1));
+    if (!inn(i - 1, j)) nxt.set(V(i, j + 1), V(i, j));
+  }
+  start = nxt.keys().next().value;
+  const ring = [];
+  for (let v = start, k = 0; k <= nxt.size; k++) {
+    ring.push(v);
+    v = nxt.get(v);
+    if (v === start || v === undefined) break;
+  }
+  const P = ring.map(v => { const i = v % (nx + 1); return [ox + i * c, oy + (v - i) / (nx + 1) * c]; });
+  // the middles of the cells' sides: the staircase smoothed (within c/2 of the band's edge, not c)
+  let pts = P.map((p, k) => { const q = P[(k + 1) % P.length]; return [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2]; });
+  pts = pts.filter((p, k) => { // the turns only
+    const a = pts[(k + pts.length - 1) % pts.length], b = pts[(k + 1) % pts.length];
+    return Math.abs((p[0] - a[0]) * (b[1] - a[1]) - (p[1] - a[1]) * (b[0] - a[0])) > 1e-9;
+  });
+  const tidy = ps => {
+    const q = ps.map(p => [r1(p[0]), r1(p[1])]).filter((p, k, a) => !k || p[0] !== a[k - 1][0] || p[1] !== a[k - 1][1]);
+    while (q.length > 1 && q[0][0] === q[q.length - 1][0] && q[0][1] === q[q.length - 1][1]) q.pop();
+    return q;
+  };
+  for (let tol = Math.max(0.8 * c, w / 12); tol >= 0.1 * c; tol /= 2) {
+    let far = 0; // the closed outline as two chains: from the first corner to the one farthest from it, and back
+    pts.forEach((p, k) => { if (Math.hypot(p[0] - pts[0][0], p[1] - pts[0][1]) > Math.hypot(pts[far][0] - pts[0][0], pts[far][1] - pts[0][1])) far = k; });
+    const q = tidy(simplifyPts(pts.slice(0, far + 1), tol).concat(simplifyPts(pts.slice(far).concat([pts[0]]), tol).slice(1, -1)));
+    if (q.length >= 3 && !polyCrosses(q)) return q;
+  }
+  return tidy(pts);
+}
+// asBush writes a drawn bush that is a band as its outline (anything else as it is)
+function asBush(s) {
+  if (!s || s.type !== 'bush' || !Array.isArray(s.path)) return s;
+  const poly = bandOutline(s.path, Math.max(1, +s.width || 1));
+  if (!poly || poly.length < 3) return s;
+  const o = Object.assign({}, s, { polygon: poly });
+  delete o.path;
+  delete o.width;
+  return o;
+}
+function cliffStrokeEnd() {
+  const st = S.stroke;
+  S.stroke = null;
+  if (!st) return;
+  const list = cliffStrokeShapes(st.pts).map(newShape).map(asBush);
+  if (!list.length) { render(); return; }
+  if (ED.refuseShapes && ED.refuseShapes(list)) { render(); return; } // feedback.js: an object it would wall in
+  edit(d => {
+    d.terrain = d.terrain && typeof d.terrain === 'object' ? d.terrain : { default: 'wall' };
+    d.terrain.shapes = Array.isArray(d.terrain.shapes) ? d.terrain.shapes : [];
+    d.terrain.shapes.push(...list);
+  });
+  select({ t: 'shape', i: shapes().length - 1 });
+}
+// the brush's outline under the mouse (and the stroke being drawn) for the cliff brush, through the view v (a preview)
+function drawBrushCursor(v) {
+  if (S.tool !== 'shape' || S.draw !== 'brush' || !S.mouseW) return;
+  const c = v.project(S.mouseW);
+  if (!c) return;
+  const g = v.overlay, hs = Math.max(0.5, S.brush.size / 2);
+  g.save();
+  g.strokeStyle = 'rgba(255,255,255,0.85)';
+  g.lineWidth = 1.5 * dpr;
+  if (S.brush.shape === 'square') vsquare(v, S.mouseW, hs); else vring(v, S.mouseW, hs); // draped on the ground in 3-D
+  g.stroke();
+  if (S.stroke && S.stroke.pts.length > 1) {
+    g.strokeStyle = (TYPE[newType()] || TYPE.open)[1];
+    g.globalAlpha = v.drape ? 0.9 : 0.6; // 3-D: an outline; the live ground shows the stroke itself (relief.js)
+    vband(v, S.stroke.pts, Math.max(1, S.brush.size));
+  }
+  g.restore();
+}
+ED.previews.push(drawBrushCursor);
+
+// the hints of app.js's own tools (shown over the view while the tool is armed)
+const TOOL_HINTS = {
+  well: 'Click where the new well goes (team 1\'s half; team 2 gets the mirror). Esc ends.',
+  camp: 'Click where the new camp goes; choose its creatures in its JSON (the selection\'s Advanced). Esc ends.',
+  ward: 'Click where the bots\' new ward spot goes (open ground both bases reach). Esc ends.',
+};
 function setTool(t) {
   S.tool = t;
   S.drawing = null;
+  S.stroke = null;
+  if (t === 'paint' || t === 'shape') S.lastMaterial = t;
+  else if (t === 'stamp') S.lastMaterial = 'paint'; // a stamp is laid from Apply Texture
   document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
-  $('shapeOpts').style.display = t === 'shape' ? '' : 'none';
   cv.style.cursor = t === 'select' ? 'default' : 'crosshair';
-  updateHint();
-  if (ED.tools[t] && ED.tools[t].hint) $('toolHint').textContent = ED.tools[t].hint;
-  $('toolHint').style.display = t === 'shape' || (ED.tools[t] && ED.tools[t].hint) ? '' : 'none';
+  if (t === 'shape' || t === 'paint') updateHint();
+  else if (ED.tools[t] && ED.tools[t].hint) $('toolHint').textContent = ED.tools[t].hint;
+  else if (TOOL_HINTS[t]) $('toolHint').textContent = TOOL_HINTS[t];
+  $('toolHint').style.display = t === 'shape' || TOOL_HINTS[t] || (ED.tools[t] && ED.tools[t].hint) ? '' : 'none';
   ED.emit('tool', t);
   render();
 }
+// updateHint: the draw mode's gesture, then what the material does
 function updateHint() {
-  const g = newGeom();
-  $('toolHint').textContent = g === 'circle' ? 'Circle: press at the centre, drag out the radius.'
-    : g === 'polygon' ? 'Polygon: click the corners; double-click or Enter ends, Esc cancels.'
-      : 'Path: click the points; double-click or Enter ends (width 12 m, change it in the inspector).';
+  const g = S.draw, size = S.brush.size;
+  const how = g === 'brush' ? `Brush: drag to draw, click for a dab (${size} m; [ ] size)`
+    : g === 'circle' ? 'Circle: press at the centre, drag out the radius'
+      : g === 'polygon' ? 'Polygon: click the corners; double-click or Enter ends, Esc cancels'
+        : `Path: click the points; double-click or Enter ends (${size} m wide: the brush size)`;
+  const what = S.tool === 'paint' ? 'the chosen texture layer; X erases'
+    : 'a ' + ((S.cliff === 'water' ? 'water' : S.cliff) || '') + ' shape; Open erases walls, Wall erases openings';
+  $('toolHint').textContent = `${how}. Draws ${what}; team 2 gets the mirror. Esc ends.`;
 }
 
 // deleteSel removes the selection where the format allows it: the fixed set can only be moved.
@@ -1049,7 +1842,7 @@ function deleteSel() {
     edit(() => deleteKnot(s.l, s.k));
     return select({ t: 'lane', l: s.l });
   }
-  if (s.t === 'obj' && ['wells', 'camps'].includes(s.path[0])) {
+  if (s.t === 'obj' && ['wells', 'camps', 'wards'].includes(s.path[0])) {
     edit(d => d[s.path[0]].splice(s.path[1], 1));
     return select(null);
   }
@@ -1065,8 +1858,43 @@ function h(tag, attrs, ...kids) {
     else if (k === 'class') el.className = v;
     else if (v !== undefined && v !== null && v !== false) el.setAttribute(k, v === true ? '' : v);
   }
-  for (const c of kids) if (c != null) el.append(c);
+  appendAll(el, ...kids);
   return el;
+}
+
+// appendAll appends the children that are nodes or text, skipping null, undefined and booleans (an optional row's
+// `cond ? h(...) : null` or `cond && h(...)`): the DOM's own append writes those as the text "null" or "false"
+// (EDUXNULL). Every part appends a list with optional members through it (or through h).
+function appendAll(el, ...kids) {
+  el.append(...kids.filter(c => c != null && typeof c !== 'boolean'));
+  return el;
+}
+
+// Under ?selftest the DOM's append, prepend, replaceChildren, before, after and replaceWith record a null, undefined or
+// boolean they are given (it would show as text), and a self-test that passed turns failed with the call sites
+// (EDUXNULL): a stray "null" anywhere the self-tests reach is a failure, not a picture someone has to notice.
+if (new URLSearchParams(location.search).has('selftest')) {
+  const stray = [];
+  const watch = (proto, name) => {
+    const f = proto[name];
+    proto[name] = function (...kids) {
+      if (kids.some(c => c == null || typeof c === 'boolean')) {
+        const at = (new Error().stack || '').split('\n').slice(2, 4).map(s => s.trim()).join(' < ');
+        if (stray.length < 20) stray.push(`${name}(${kids.map(c => c == null || typeof c === 'boolean' ? String(c) : '...').join(', ')}) ${at}`);
+      }
+      return f.apply(this, kids);
+    };
+  };
+  for (const n of ['append', 'prepend', 'replaceChildren', 'before', 'after', 'replaceWith']) watch(Element.prototype, n);
+  for (const n of ['append', 'prepend', 'replaceChildren']) watch(DocumentFragment.prototype, n);
+  let told = 0;
+  new MutationObserver(() => {
+    const st = document.body.dataset.selftest;
+    if (!st || told === stray.length) return;
+    $('selftest').textContent += stray.slice(told).map(s => '\nFAIL a stray text: ' + s).join('');
+    told = stray.length;
+    if (st === 'passed') { document.title = 'selftest failed'; document.body.dataset.selftest = 'failed'; }
+  }).observe(document.body, { attributes: true, attributeFilter: ['data-selftest'] });
 }
 
 function xyInputs(get, set) {
@@ -1103,14 +1931,42 @@ function jsonEditor(value, apply) {
     try { v = JSON.parse(ta.value); } catch (e) { msg.textContent = e.message; return; }
     edit(() => apply(v));
   } }, 'Apply JSON');
-  return h('div', {}, ta, h('div', { class: 'btns' }, btn, msg));
+  return h('div', { class: 'jsoned' }, ta, h('div', { class: 'btns' }, btn, msg));
 }
+
+// adv marks controls for the selection's Advanced section (a closed details at the end of the selection's info:
+// the JSON editors, the drawing order, a prop's tilt and footprint, a group's source, the scatter's settings)
+function adv(...kids) { return h('div', { class: 'adv-item' }, ...kids); }
+ED.adv = adv;
 
 function renderInspector() {
   const el = $('inspector');
   if (el.contains(document.activeElement) && document.activeElement.tagName === 'TEXTAREA') return;
+  const wasOpen = !!el.querySelector('details.adv[open]');
   el.textContent = '';
-  if (!S.doc) { el.append(h('p', { class: 'hint' }, 'Open a map.')); return; }
+  inspectorBody(el);
+  // the simplified inspector: what is marked advanced (and every JSON editor) goes into the closed Advanced section
+  const items = [...el.querySelectorAll(':scope > .adv-item, :scope > .jsoned, :scope > div > .jsoned')];
+  if (items.length) {
+    const d = h('details', { class: 'adv' }, h('summary', {}, 'Advanced'));
+    if (wasOpen || S.advOpen) d.open = true;
+    S.advOpen = false;
+    items.forEach(it => d.append(it));
+    el.append(d);
+  }
+  ED.emit('inspector', el);
+}
+// openAdvanced opens the selection's Advanced section (Advanced > Edit the Selection as JSON)
+function openAdvanced() {
+  const d = $('inspector').querySelector('details.adv');
+  if (!d) return false;
+  d.open = true;
+  const ta = d.querySelector('textarea');
+  if (ta) { ta.scrollIntoView({ block: 'nearest' }); ta.focus(); } else d.scrollIntoView({ block: 'nearest' });
+  return true;
+}
+function inspectorBody(el) {
+  if (!S.doc) { el.append(h('p', { class: 'hint' }, 'Open a map (File > Open Map, Ctrl+O).')); return; }
   const s = S.sel;
   if (!s || selValue(s) === undefined && s.t !== 'auto') return mapInspector(el);
   if (ED.sel[s.t] && ED.sel[s.t].inspector) return ED.sel[s.t].inspector(el, s);
@@ -1127,10 +1983,10 @@ function renderInspector() {
         h('option', { value: 'well', selected: w.kind !== 'mine' }, 'well (18 workers)'),
         h('option', { value: 'mine', selected: w.kind === 'mine' }, 'mine (36 workers)'))));
     }
-    if (['wells', 'camps'].includes(s.path[0])) {
-      el.append(joinedNote(s));
-      el.append(jsonEditor(getAt(S.doc, parentPath), v => setAt(S.doc, parentPath, v)),
-        h('div', { class: 'btns' }, h('button', { onclick: deleteSel }, 'Delete')));
+    if (['wells', 'camps', 'wards'].includes(s.path[0])) {
+      if (s.path[0] !== 'wards') el.append(joinedNote(s));
+      el.append(h('div', { class: 'btns' }, h('button', { onclick: deleteSel }, 'Delete')),
+        jsonEditor(getAt(S.doc, parentPath), v => setAt(S.doc, parentPath, v)));
     }
     if (s.path[1] === 'cores' || s.path[1] === 'bindings') {
       el.append(h('div', { class: 'btns' }, h('button', { onclick: () => { edit(d => { d.base[s.path[1]] = 'auto'; }); select(null); } },
@@ -1143,9 +1999,9 @@ function renderInspector() {
       h('p', {}, 'Placed by the compiler from the lanes and the Guardian. Drag one to place them all by hand (they become explicit points).'));
     return;
   }
-  if (s.t === 'knot' || s.t === 'lane') {
+  if (s.t === 'knot' || s.t === 'lane' || s.t === 'lwidth') {
     const l = lanes()[s.l];
-    el.append(h('div', { class: 'path' }, s.t === 'knot' ? `lanes[${s.l}].knots[${s.k}]` : `lanes[${s.l}]`),
+    el.append(h('div', { class: 'path' }, s.t === 'knot' ? `lanes[${s.l}].knots[${s.k}]` : s.t === 'lwidth' ? `lanes[*].width` : `lanes[${s.l}]`),
       h('div', {}, `lane ${l.id} (${{ 1: 'Top', 2: 'Bottom' }[l.id] || '?'}), ${l.knots.length} knots, team 1's direction from its base`));
     if (s.t === 'knot') {
       el.append(xyInputs(() => l.knots[s.k], q => setPoint(['lanes', s.l, 'knots', s.k], q)),
@@ -1156,14 +2012,21 @@ function renderInspector() {
           h('button', { onclick: deleteSel }, 'Delete knot')));
     }
     el.append(h('label', {}, 'width (m, both lanes) ', h('input', { type: 'number', step: '1', value: l.width, onchange: ev => {
-      edit(d => d.lanes.forEach(x => { x.width = +ev.target.value; }));
+      setLaneWidth(+ev.target.value, ev.target);
     } })));
     return;
   }
   const i = s.i, sh = shapes()[i];
   el.append(h('div', { class: 'path' }, `terrain.shapes[${i}]`));
   if (s.t === 'vertex') el.append(h('div', {}, `corner ${s.v}`), xyInputs(() => (sh.polygon || sh.path)[s.v], q => { (sh.polygon || sh.path)[s.v] = q; }));
-  const typeSel = h('select', { onchange: ev => edit(() => { sh.type = ev.target.value; }) },
+  const typeSel = h('select', { onchange: ev => edit(() => {
+    sh.type = ev.target.value;
+    HT.fitType(sh);
+    if (sh.type === 'bush' && Array.isArray(sh.path) && sh.lane === undefined) { // a band made a bush: its outline
+      const b = asBush(sh);
+      if (b !== sh) { delete sh.path; delete sh.width; sh.polygon = b.polygon; }
+    }
+  }) },
     ...['open', 'wall', 'chasm', 'island', 'bush'].map(t => h('option', { value: t, selected: sh.type === t }, t)));
   el.append(h('label', {}, 'type ', typeSel));
   if (sh.r !== undefined) el.append(h('label', {}, 'radius (m) ', h('input', { type: 'number', step: '0.5', value: sh.r, onchange: ev => edit(() => { sh.r = +ev.target.value; }) })));
@@ -1172,44 +2035,90 @@ function renderInspector() {
     el.append(h('label', { title: 'A water plane at z -2 m (or the JSON\'s "z"), sized to the chasm by the compiler' },
       h('input', { type: 'checkbox', checked: !!sh.water, onchange: ev => edit(() => { if (ev.target.checked) sh.water = true; else delete sh.water; }) }), ' water'));
   }
+  if (sh.lane === undefined) { const hf = HT.field(sh, i); if (hf) el.append(hf); } // a wall's height, a chasm's depth (heights.js, EDUX9)
   const move = dlt => () => {
     const j = i + dlt;
     if (j < 0 || j >= shapes().length) return;
     edit(d => { const a = d.terrain.shapes; [a[i], a[j]] = [a[j], a[i]]; });
     select({ t: 'shape', i: j });
   };
-  el.append(h('div', { class: 'btns' }, h('button', { onclick: move(-1), title: 'Drawn earlier (under)' }, 'Up'),
-    h('button', { onclick: move(1), title: 'Drawn later (over)' }, 'Down'), h('button', { onclick: deleteSel }, 'Delete')),
-  h('p', { class: 'small' }, 'Shapes are drawn in order over terrain.default; the compiler adds each one\'s mirror. Double-click an edge to add a corner.'),
-  jsonEditor(sh, v => { S.doc.terrain.shapes[i] = v; }));
+  el.append(h('div', { class: 'btns' }, h('button', { onclick: deleteSel }, 'Delete')),
+    h('p', { class: 'small' }, 'Team 2 gets its mirror. Double-click an edge to add a corner.'),
+    adv(h('div', { class: 'btns' }, 'drawing order ', h('button', { onclick: move(-1), title: 'Drawn earlier (under)' }, 'Up'),
+      h('button', { onclick: move(1), title: 'Drawn later (over)' }, 'Down')),
+    h('p', { class: 'small' }, 'Shapes are drawn in order over the ground everywhere else (Map > Options); a later one wins where they overlap.')),
+    jsonEditor(sh, v => { S.doc.terrain.shapes[i] = v; }));
 }
 
 // joinedNote says what a drag of the knot, well or camp takes along (outlined on the map)
 function joinedNote(sel) {
-  if (!$('optJoined').checked) return h('p', { class: 'small' }, 'A drag moves only this point (tick *drag joined shapes along* to take the shapes joined to it).');
+  if (!S.joined) return h('p', { class: 'small' }, 'A drag moves only this point (Tools > Drag Joined Shapes Along takes the shapes joined to it).');
   const js = joinedTo(sel), whole = js.filter(m => m.whole).length;
-  return h('p', { class: 'small' }, js.length ? `A drag takes ${whole} shape${whole === 1 ? '' : 's'} and ${js.length - whole} path end${js.length - whole === 1 ? '' : 's'} or corner${js.length - whole === 1 ? '' : 's'} along (outlined; the option *drag joined shapes along*).` : 'Nothing is joined to it: a drag moves only this point.');
+  return h('p', { class: 'small' }, js.length ? `A drag takes ${whole} shape${whole === 1 ? '' : 's'} and ${js.length - whole} path end${js.length - whole === 1 ? '' : 's'} or corner${js.length - whole === 1 ? '' : 's'} along (outlined; Tools > Drag Joined Shapes Along).` : 'Nothing is joined to it: a drag moves only this point.');
 }
 
+// mapInspector: with nothing selected, the selection info shows the map's facts; its fields are in the Map menu's
+// windows (Properties, Options) and the whole document in Advanced > Edit the Map as JSON
 function mapInspector(el) {
+  const d = S.doc, st = S.report && S.report.stats, n = k => Array.isArray(d[k]) ? d[k].length : 0;
+  const link = (t, fn) => h('a', { class: 'lnk', onclick: fn }, t);
+  el.append(h('dl', {},
+    h('dt', {}, 'map'), h('dd', {}, S.pkg),
+    h('dt', {}, 'display name'), h('dd', {}, String(d.display || '')),
+    h('dt', {}, 'size'), h('dd', {}, (d.size || 400) + ' m, ground everywhere else ' + ((d.terrain && d.terrain.default) || 'wall')),
+    h('dt', {}, 'terrain'), h('dd', {}, shapes().length + ' shapes'),
+    h('dt', {}, 'doodads'), h('dd', {}, n('props') + ' props, ' + n('scatter') + ' scatter regions'),
+    h('dt', {}, 'units'), h('dd', {}, n('wells') + ' wells, ' + n('camps') + ' camps, ' + n('wards') + ' ward spots'),
+    h('dt', {}, 'lanes'), h('dd', {}, lanes().length + (st && st.laneLengths ? ': ' + st.laneLengths.join(' / ') + ' m' : '')),
+    st ? h('dt', {}, 'graphs') : null, st ? h('dd', {}, `${st.playerAreas} (Player) / ${st.npcAreas} (NPC) areas`) : null,
+    h('dt', {}, 'check'), h('dd', {}, link($('checkState').textContent, () => ED.openWindow('check')))));
+  const bs = S.report ? botsSummary() : null;
+  if (bs && bs.text) el.append(h('p', { class: 'small' + (bs.uneven ? ' warn' : '') }, bs.text));
+  el.append(h('p', { class: 'small' }, 'Map > ', link('Properties...', () => ED.act('map.properties')), ', ', link('Options...', () => ED.act('map.options')),
+    '. Click something in the view, or pick it in a palette tab, to edit it.'),
+  jsonEditor(d, v => { S.doc = v; }));
+}
+
+// the Map menu's Properties and Options windows and Advanced > Edit the Map as JSON (frame.js opens them)
+function renderMapWindows() {
   const d = S.doc;
-  el.append(h('div', { class: 'path' }, S.pkg + '/map.json'));
+  const wp = ED.window('props', 'Map Properties'), wo = ED.window('options', 'Map Options'), wj = ED.window('mapjson', 'The Map as JSON');
+  for (const w of [wp, wo, wj]) {
+    if (w.contains(document.activeElement) && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) continue;
+    w.textContent = '';
+    if (!d) w.append(h('p', { class: 'hint' }, 'Open a map.'));
+  }
+  if (!d) return;
   const field = (label, get, set, type) => h('label', {}, label + ' ', h('input', {
     type: type || 'text', value: get() ?? '', onchange: ev => edit(() => set(type === 'number' ? +ev.target.value : ev.target.value)),
   }));
-  for (const [k, v] of Object.entries(d)) { // every top-level scalar, the unknown ones too
-    if (v === null || typeof v === 'object') continue;
-    el.append(field(k, () => d[k], x => { d[k] = x; }, typeof v === 'number' ? 'number' : 'text'));
+  if (!wp.firstChild) {
+    wp.append(h('div', { class: 'path' }, S.pkg + '/map.json'));
+    for (const [k, v] of Object.entries(d)) { // every top-level scalar, the unknown ones too
+      if (v === null || typeof v === 'object') continue;
+      wp.append(field(k, () => d[k], x => { d[k] = x; }, typeof v === 'number' ? 'number' : 'text'));
+    }
+    wp.append(h('p', { class: 'small' }, 'name: the Level\'s and the folder\'s; display: the name the game shows (1-13 characters); tag: the custom game\'s ~#tag; prefix: its names\' prefix.'));
   }
-  if (d.terrain && typeof d.terrain === 'object') {
-    el.append(h('label', {}, 'terrain.default ', h('select', { onchange: ev => edit(() => { d.terrain.default = ev.target.value; }) },
-      ...['wall', 'open', 'chasm'].map(t => h('option', { value: t, selected: d.terrain.default === t }, t)))));
+  if (!wo.firstChild) {
+    if (d.terrain && typeof d.terrain === 'object') {
+      wo.append(h('label', { title: 'The ground where no shape lies' }, 'the ground everywhere else (terrain.default) ', h('select', { onchange: ev => edit(() => { d.terrain.default = ev.target.value; }) },
+        ...['wall', 'open', 'chasm'].map(t => h('option', { value: t, selected: d.terrain.default === t }, t)))));
+    }
+    wo.append(h('p', { class: 'small' }, 'Shapes (Terrain > Apply Cliff) are drawn over it.'));
   }
-  el.append(h('p', { class: 'small' }, 'Select something on the canvas to edit it. Esc deselects, F fits the view, Del deletes, drag with the right button pans.'));
-  el.append(h('details', {}, h('summary', {}, 'The whole document as JSON'), jsonEditor(d, v => { S.doc = v; })));
+  if (!wj.firstChild) wj.append(jsonEditor(d, v => { S.doc = v; }), h('p', { class: 'small' }, 'The whole map.json; Apply JSON is one undo step.'));
 }
+ED.on('doc', () => { if (ED.isOpen('props') || ED.isOpen('options') || ED.isOpen('mapjson')) renderMapWindows(); });
+ED.on('open', renderMapWindows);
+ED.on('window', (id, on) => { if (on && ['props', 'options', 'mapjson'].includes(id)) renderMapWindows(); });
 
 // ---- checks -----------------------------------------------------------------------------------------------
+
+// the Map Check window (Map > Check..., the status bar's last part, the toolbar's check badge): the findings, the
+// graphs' stats and the bots' line
+ED.window('check', 'Map Check').append(h('div', { class: 'small', id: 'checkSummary' }), h('div', { id: 'findings' }),
+  h('div', { id: 'stats', class: 'small' }), h('div', { id: 'botsInfo', class: 'small' }));
 
 function scheduleCheck() {
   clearTimeout(S.checkTimer);
@@ -1236,7 +2145,9 @@ async function runCheck() {
     S.report = res.report;
   }
   S.rev = res.rev || S.rev;
+  S.checkedJSON = sent; // the draft the 3-D ground and the bake are made from next (the live preview's base: relief.js)
   if (res.preview) {
+    S.previewJSON = sent; // what layout.png shows
     S.preview = res.preview;
     S.images = res.images;
     renderLayers();
@@ -1252,6 +2163,7 @@ function setBadge(text, cls) {
   const b = $('checkState');
   b.textContent = text;
   b.className = 'badge ' + (cls || '');
+  ED.emit('badge', text, cls); // the status bar's last part (frame.js)
 }
 
 function renderFindings() {
@@ -1269,8 +2181,9 @@ function renderFindings() {
       onmouseenter: () => { S.hoverFinding = f; render(); }, onmouseleave: () => { S.hoverFinding = null; render(); },
       onclick: () => {
         if (Array.isArray(f.parts) && f.parts.length) return selectPart(f, 'next'); // reach.dropped: part by part
+        if (ED.jumpFinding && ED.jumpFinding(f)) return; // feedback.js: select it and show it in the view shown
         if (f.path) selectPath(f.path);
-        if (f.at) { S.view.x = f.at[0]; S.view.y = f.at[1]; S.fitted = false; render(); }
+        if (f.at) { if (typeof FR !== 'undefined') FR.centre(f.at); else { S.view.x = f.at[0]; S.view.y = f.at[1]; S.fitted = false; render(); } } // either view
       } },
     h('div', { class: 'rule' }, (f.severity === 'warning' ? 'warning ' : 'error ') + f.rule), where ? h('div', { class: 'where' }, where) : null,
     h('div', {}, f.message || ''),
@@ -1313,17 +2226,13 @@ ED.sel.part = {
 
 // ---- layers -----------------------------------------------------------------------------------------------
 
-function renderLayers() {
-  const el = $('bgList');
-  if (!S.preview || el.dataset.rev === 'set') return;
-  el.dataset.rev = 'set';
-  el.textContent = '';
-  const files = [{ file: '', shows: 'no picture' }].concat(S.preview.files);
-  for (const f of files) {
-    const name = f.file ? f.file.replace('.png', '') : 'none';
-    el.append(h('label', { title: f.shows }, h('input', { type: 'radio', name: 'bg', value: f.file, checked: f.file === S.bg,
-      onchange: () => { S.bg = f.file; loadBg(); render(); } }), ' ' + name));
-  }
+// the check's pictures under the 2-D view: View > Background Layer (S.preview.files; '' none) and its opacity;
+// View > Pathing (P) is the Player graph's picture; the overlays are View's Show items (S.show)
+function renderLayers() { ED.emit('layers', S.preview && S.preview.files); }
+function setBg(file) {
+  S.bg = file || '';
+  loadBg();
+  render();
 }
 function loadBg() {
   if (!S.bg || !S.images) { S.img = null; return; }
@@ -1332,27 +2241,16 @@ function loadBg() {
   img.onload = () => { if (file === S.bg) { S.img = img; S.imgFile = file; S.imgRev = rev; render(); } };
   img.src = S.images + file;
 }
-function renderOverlays() {
-  const el = $('overlayList');
-  const names = { shapes: 'shapes', mirror: "team 2's mirror", lanes: 'lanes', objects: 'objects', props: 'props', findings: 'findings', bots: "the bots' points (rally, Hunter routes)", half: 'the halves', grid: 'grid (20 m)' };
-  for (const k of Object.keys(S.show)) {
-    el.append(h('label', {}, h('input', { type: 'checkbox', checked: S.show[k], onchange: ev => { S.show[k] = ev.target.checked; render(); } }), ' ' + names[k]));
-  }
-}
+function toggleShow(k) { S.show[k] = !S.show[k]; render(); ED.emit('show', k); }
 
-// ---- views (2-D now; later packages add theirs) -----------------------------------------------------------
+// ---- views: the main view is 2-D or 3-D (the toolbar's switch, View, Tab) --------------------------------------
 
 function renderTabs() {
-  const nav = $('viewTabs');
+  const nav = $('viewSeg');
   nav.textContent = '';
-  const all = [{ id: '2d', title: '2-D', el: $('view2d') }].concat(ED.views);
-  for (const v of all) {
-    nav.append(h('button', { class: v.el.classList.contains('on') ? 'on' : '', onclick: () => {
-      all.forEach(x => x.el.classList.toggle('on', x === v));
-      renderTabs();
-      if (v.id === '2d') resize();
-      ED.emit('view', v.id);
-    } }, v.title));
+  for (const v of Object.values(ED.views)) {
+    nav.append(h('button', { class: ED.view === v.id ? 'on' : '', 'data-view': v.id,
+      title: (v.id === '2d' ? 'The 2-D view, from above' : 'The ' + v.title + ' view') + ' (Tab switches)', onclick: () => ED.setView(v.id) }, v.title));
   }
 }
 
@@ -1360,12 +2258,6 @@ function renderTabs() {
 
 async function loadState() {
   S.config = await api('GET', '/api/state');
-  const sel = $('mapSelect');
-  const cur = sel.value;
-  sel.textContent = '';
-  sel.append(h('option', { value: '' }, '(open a map)'));
-  for (const m of S.config.maps || []) sel.append(h('option', { value: m.pkg }, m.pkg + (m.display ? ' - ' + m.display : '')));
-  sel.value = S.pkg || cur;
   if (S.config.test && !S.config.test.enabled && !S.testNoted) { S.testNoted = true; log('Test is off: ' + S.config.test.reason); }
   if (!S.test) pollTest(true); // a Test started before the page was (re)loaded
   if (S.config.pageError) log(S.config.pageError, 'err'); // the backend serves an error page instead; a page kept open
@@ -1373,7 +2265,7 @@ async function loadState() {
 }
 
 async function openMap(pkg) {
-  if (S.doc && updateDirty() && !confirm('Discard the unsaved changes to ' + S.pkg + '?')) { $('mapSelect').value = S.pkg; return; }
+  if (S.doc && updateDirty() && !confirm('Discard the unsaved changes to ' + S.pkg + '?')) return;
   const res = await api('GET', '/api/map/' + pkg);
   if (res.error) { log(res.error, 'err'); return; }
   let doc;
@@ -1382,8 +2274,6 @@ async function openMap(pkg) {
   Object.assign(S, { pkg, doc, base: res.sha256, savedJSON: JSON.stringify(doc), undo: [], redo: [], sel: null,
     delivered: res.delivered || null,
     report: null, preview: null, images: null, img: null, imgFile: '', drawing: null, placed: null, placedFrom: null });
-  $('bgList').dataset.rev = '';
-  $('mapSelect').value = pkg;
   history.replaceState(null, '', '?open=' + encodeURIComponent(pkg) + (location.search.includes('selftest') ? '&selftest=' + new URLSearchParams(location.search).get('selftest') : ''));
   fit();
   changed(true);
@@ -1408,11 +2298,12 @@ async function save(force) {
   return res;
 }
 
-async function build() {
+// build: File > Build; noMesh (Advanced > Build without the PhysX Mesh) leaves the cooked mesh out
+async function build(noMesh) {
   if (!S.doc) return;
   if (updateDirty() && !S.delivered) { if (!confirm('Build reads the saved package. Save first?')) return; await save(); }
   log(`building ${S.pkg}...`);
-  const res = await api('POST', `/api/build/${S.pkg}?mesh=${$('optNoMesh').checked ? 0 : 1}`);
+  const res = await api('POST', `/api/build/${S.pkg}?mesh=${noMesh === true ? 0 : 1}`);
   const r = res.result;
   if (res.exit === 0 && r && r.ok) log(`built ${r.archive}: ${r.bytes} bytes, sha256 ${r.sha256.slice(0, 16)}${r.mesh ? '' : ' (no mesh)'}`, 'ok');
   else log('build: ' + ((r && r.error) || res.error || 'failed'), 'err');
@@ -1470,12 +2361,12 @@ function updateTestButton() {
   const b = $('btnTest'), stop = $('btnTestStop'), state = $('testState');
   const on = S.config && S.config.test && S.config.test.enabled, run = S.test && S.test.running;
   const starting = run && S.test.phase !== 'playing'; // one Test at a time until its game runs
-  b.textContent = run && !starting ? 'Test again' : 'Test';
+  b.innerHTML = '<i class="ic">&#x25B6;</i>' + (run && !starting ? 'Test Again' : 'Test Map');
   b.disabled = !S.doc || !on || starting;
   b.title = !on ? (S.config && S.config.test && S.config.test.reason) || ''
     : starting ? 'A Test is starting: wait until the game runs, or press Stop'
       : run ? 'Save, then close the game and start it again on the saved version'
-        : 'Save, then play this map in the game: log in on This PC, then PLAY, PRACTICE DAWNGATE';
+        : 'Test Map (Ctrl+F9): save, then play this map in the game: log in on This PC, then PLAY, PRACTICE DAWNGATE';
   stop.classList.toggle('hidden', !run);
   state.classList.toggle('hidden', !S.test);
   if (S.test) {
@@ -1529,6 +2420,14 @@ $('dlgNew').addEventListener('close', async () => {
 
 // ---- keys and buttons -------------------------------------------------------------------------------------
 
+// viewFocused: the view's own keys (the arrows, F) apply. The 2-D view: always (but typing); another view (3-D) only
+// with the focus in it (a click there) or on nothing, so the keys of a focused list or button stay theirs
+function viewFocused() {
+  if (ED.view === '2d') return true;
+  const ae = document.activeElement, v = ED.active();
+  return !ae || ae === document.body || (!!v.el && v.el.contains(ae));
+}
+
 window.addEventListener('keydown', e => {
   const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); save(); return; }
@@ -1539,22 +2438,16 @@ window.addEventListener('keydown', e => {
   else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSel(); }
   else if (e.key === 'Escape') { if (S.grab) { S.grab = null; render(); } else if (S.drawing) { S.drawing = null; render(); } else if (S.tool !== 'select') setTool('select'); else select(null); }
   else if (e.key === 'Enter') drawFinish();
-  else if (e.key === 'f' || e.key === 'F') fit();
+  else if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey) { if (ED.view === '2d') fit(); else if (viewFocused()) ED.act('view.frameSel'); }
 });
 window.addEventListener('beforeunload', e => { if (S.doc && updateDirty()) { e.preventDefault(); e.returnValue = ''; } });
-$('mapSelect').addEventListener('change', e => e.target.value && openMap(e.target.value));
 $('btnUndo').onclick = undo;
 $('btnRedo').onclick = redo;
 $('btnSave').onclick = () => save();
-$('btnBuild').onclick = build;
 $('btnTest').onclick = testMap;
 $('btnTestStop').onclick = stopTest;
 $('btnNew').onclick = () => newDialog(false);
-$('btnSaveOwn').onclick = () => newDialog(true);
-$('bgAlpha').oninput = e => { S.bgAlpha = e.target.value / 100; render(); };
-$('optJoined').onchange = () => { renderInspector(); render(); };
 document.querySelectorAll('[data-tool]').forEach(b => { b.onclick = () => setTool(b.dataset.tool); });
-document.querySelectorAll('input[name=sgeom]').forEach(r => { r.onchange = () => { S.drawing = null; updateHint(); }; });
 
 // ---- the self-test (?selftest=1, or =save to save too): scripted edits through the same functions ------------
 
@@ -1612,6 +2505,120 @@ async function selftest(mode) {
   document.body.dataset.selftest = ok ? 'passed' : 'failed';
 }
 
+// ---- EDUX2's self-test (?selftest=views): the views' contract and the one input pipeline, unit-style; nothing edited
+ED.selftests = ED.selftests || {};
+ED.selftests.views = async function selftestViews() {
+  const out = $('selftest'), lines = [];
+  out.classList.remove('hidden');
+  const say = (ok, msg) => { lines.push((ok ? 'PASS ' : 'FAIL ') + msg); out.textContent = lines.join('\n'); return !!ok; };
+  const until = async (fn, ms) => { const t0 = Date.now(); while (!fn()) { if (Date.now() - t0 > ms) return false; await new Promise(r => setTimeout(r, 50)); } return true; };
+  let ok = true;
+  ok &= say(await until(() => S.doc && S.preview && objects().length, 20000), `a map open with its objects (${S.pkg})`);
+  ED.setView('2d');
+  setTool('select');
+  const V2 = ED.views['2d'], V3 = ED.views['3d'], fns = ['pick', 'pickAt', 'project', 'ppm'];
+  ok &= say(V2 === VIEW2D && fns.every(k => typeof V2[k] === 'function') && V2.overlay === ctx && V2.el === $('view2d'),
+    'the 2-D view registers the contract: el, pick, pickAt, project, ppm and its canvas as the overlay');
+  ok &= say(V3 && fns.every(k => typeof V3[k] === 'function') && V3.overlay && V3.overlay.canvas && V3.drape && V3.pick({ clientX: 50, clientY: 50 }) === null,
+    'the 3-D view registers it too: its overlay canvas, draping; no pick while it is hidden');
+  ok &= say(Object.keys(ED.views).join(',') === '2d,3d' && $('viewSeg').children.length === 2, 'ED.views by id (2d, 3d), the toolbar\'s switch made from it');
+  // round trips at three zooms and pans: world -> screen -> world and screen -> world -> screen
+  const view0 = Object.assign({}, S.view), fitted0 = S.fitted, r = cv.getBoundingClientRect();
+  const pts = [[0, 0], [-150.5, 120.25], [173.3, -88.8], [12.34, 56.78]];
+  let worstW = 0, worstS = 0, worstE = 0, nearOk = true;
+  for (const vw of [view0, { x: 40, y: -25, scale: 3.7 }, { x: -120, y: 80, scale: 0.21 }]) {
+    S.view = Object.assign({}, vw);
+    for (const p of pts) {
+      const s = V2.project(p), pk = V2.pickAt(s[0], s[1]);
+      worstW = Math.max(worstW, Math.hypot(pk.w[0] - p[0], pk.w[1] - p[1]));
+      nearOk = nearOk && Math.abs(pk.near - dpr / S.view.scale) < 1e-12 && pk.z === 0 && pk.view === '2d' && pk.sx === s[0] && pk.sy === s[1] && V2.ppm(p) === S.view.scale;
+      const pe = V2.pick({ clientX: r.left + s[0] / dpr, clientY: r.top + s[1] / dpr });
+      worstE = Math.max(worstE, Math.hypot(pe.w[0] - p[0], pe.w[1] - p[1]));
+      const q = V2.project(V2.pickAt(s[0] + 7.5, s[1] - 3.25).w);
+      worstS = Math.max(worstS, Math.hypot(q[0] - s[0] - 7.5, q[1] - s[1] + 3.25));
+    }
+  }
+  S.view = view0; S.fitted = fitted0; render();
+  ok &= say(worstW < 1e-9, `project then pickAt gives the world point back (worst ${worstW.toExponential(1)} m, 4 points at 3 zooms)`);
+  ok &= say(worstS < 1e-9, `pickAt then project gives the pixel back (worst ${worstS.toExponential(1)} px)`);
+  ok &= say(worstE < 1e-6, `pick(e) from client coordinates gives the same point (worst ${worstE.toExponential(1)} m)`);
+  ok &= say(nearOk, 'the pick: near = dpr / scale metres a pixel, z 0, view 2d, sx, sy the canvas pixel; ppm the scale');
+  // hit: through a pick the same as through the canvas point; the object under it
+  const o = objects()[0];
+  S.view = { x: o.pos[0], y: o.pos[1], scale: 6 * dpr }; S.fitted = false; render();
+  select(null);
+  const so = V2.project(o.pos), h1 = hit(V2.pickAt(so[0], so[1])), h2 = hit(so[0], so[1]);
+  ok &= say(h1 && sameSel(h1.sel, objSel(o)) && JSON.stringify(h1) === JSON.stringify(h2), `hit(pick) = hit(sx, sy): the object under it (${h1 && JSON.stringify(h1.sel)})`);
+  // the pipeline with real events: a mousemove sets S.mouseW from the shown view's pick, a click selects
+  const client = w => { const b = cv.getBoundingClientRect(), s = w2s(w); return { clientX: b.left + s[0] / dpr, clientY: b.top + s[1] / dpr }; };
+  const tol = dpr / S.view.scale + 1e-9; // whole-pixel events: within a pixel
+  window.dispatchEvent(new MouseEvent('mousemove', Object.assign({ bubbles: true }, client([o.pos[0] + 2, o.pos[1] - 1]))));
+  ok &= say(S.mouseW && Math.hypot(S.mouseW[0] - o.pos[0] - 2, S.mouseW[1] - o.pos[1] + 1) <= tol, `a mousemove: S.mouseW from the 2-D pick (${S.mouseW})`);
+  cv.dispatchEvent(new MouseEvent('mousedown', Object.assign({ button: 0, bubbles: true }, client(o.pos))));
+  const pressed = S.press;
+  window.dispatchEvent(new MouseEvent('mouseup', Object.assign({ button: 0, bubbles: true }, client(o.pos))));
+  ok &= say(sameSel(S.sel, objSel(o)) && pressed === '2d' && S.press === null && !S.drag, `a click on it selects it through the pipeline (the press went to ${pressed})`);
+  // the 3-D view (EDUX3): its pick is the camera's ray over the ground, so the mouse has a world point there and a
+  // left press is the tools'
+  select(null);
+  ED.setView('3d');
+  const ready3 = typeof V3D !== 'undefined' && V3D.V.gl && await until(() => V3D.V.heights && !V3D.V.groundBusy && V3D.V.scene, 60000);
+  if (ready3) {
+    V3D.frame();
+    const c = V3.project(V3D.look()), cw = V3D.V.canvas.width, ch = V3D.V.canvas.height;
+    ok &= say(c && Math.hypot(c[0] - cw / 2, c[1] - ch / 2) < 0.5 && V3.ppm(V3D.look()) > 0 && V3.project(V3D.eye()) === null,
+      `the 3-D project: the camera's look point at the canvas's centre (${c && c.map(v => v.toFixed(1))} of ${cw}x${ch}), the eye itself nowhere`);
+    let worst3 = 0, picked = 0;
+    for (const [fx, fy] of [[0.5, 0.5], [0.3, 0.7], [0.7, 0.35], [0.45, 0.9]]) {
+      const pk = V3.pickAt(cw * fx, ch * fy);
+      if (!pk) continue;
+      picked++;
+      const q = V3.project(pk.w);
+      worst3 = Math.max(worst3, q ? Math.hypot(q[0] - cw * fx, q[1] - ch * fy) : Infinity);
+    }
+    ok &= say(picked === 4 && worst3 < 1, `3-D: pickAt then project gives the pixel back (worst ${worst3.toFixed(3)} px, ${picked} of 4 pixels on the ground)`);
+    const b3 = V3D.V.canvas.getBoundingClientRect(), at = { clientX: Math.round(b3.left + b3.width / 2), clientY: Math.round(b3.top + b3.height * 0.6) };
+    window.dispatchEvent(new MouseEvent('mousemove', Object.assign({ bubbles: true }, at)));
+    const pe = V3.pick(at);
+    ok &= say(S.mouseW && pe && Math.hypot(S.mouseW[0] - pe.w[0], S.mouseW[1] - pe.w[1]) < 1e-9 && pe.view === '3d' && pe.near > 0,
+      `3-D: a mousemove gives S.mouseW from its pick (${S.mouseW && S.mouseW.map(v => v.toFixed(1))}, ${pe && pe.near.toFixed(3)} m a pixel)`);
+    const taken = ED.input.down(V3, new MouseEvent('mousedown', Object.assign({ button: 0 }, at)));
+    const pressed3 = S.press;
+    window.dispatchEvent(new MouseEvent('mouseup', Object.assign({ button: 0, bubbles: true }, at)));
+    ok &= say(taken === true && pressed3 === '3d' && S.press === null, 'a left press in 3-D is the tools\' (the pipeline took it)');
+    const hs = [V3.project(pe.w)].map(s => [hit(s[0], s[1]), hit(V3.pickAt(s[0], s[1]))])[0];
+    ok &= say(JSON.stringify(hs[0]) === JSON.stringify(hs[1]), 'hit(sx, sy) follows the shown view (3-D): ' + JSON.stringify(hs[0] && hs[0].sel));
+  } else ok &= say(true, 'the 3-D view: skipped (no WebGL)');
+  select(null);
+  ED.setView('2d');
+  // the previews draw through the view they are given (its project and ppm), and not without an overlay
+  const calls = [];
+  const rec = { id: 'rec', overlay: ctx, project: p => { calls.push(p); return VIEW2D.project(p); }, ppm: p => VIEW2D.ppm(p) };
+  const through = () => { calls.length = 0; ED.drawPreviews(rec); return calls.length; };
+  const draw0 = S.draw;
+  setTool('shape'); S.draw = 'brush'; S.mouseW = [5, 5];
+  const nBrush = through();
+  S.draw = 'polygon'; S.drawing = { geom: 'polygon', pts: [[0, 0], [20, 0]], mouse: [20, 20] };
+  const nPoly = through();
+  S.drawing = null; S.draw = draw0;
+  await until(() => PR.P.nouns && PR.P.nouns.length, 10000);
+  const cur0 = PR.P.cur;
+  PR.P.cur = PR.P.nouns.length ? PR.P.nouns[0].name : cur0;
+  setTool('prop'); S.mouseW = [5, 5];
+  const nGhost = through();
+  calls.length = 0;
+  ED.drawPreviews(Object.assign({}, rec, { overlay: null }));
+  const nNone = calls.length;
+  PR.P.cur = cur0;
+  setTool('select');
+  S.view = view0; S.fitted = fitted0; render();
+  ok &= say(nBrush >= 1 && nPoly >= 3 && nGhost >= 1 && nNone === 0,
+    `the previews draw through the view's project: the cliff brush ${nBrush}, a polygon in progress ${nPoly}, the doodad's ghost ${nGhost} points; none without an overlay`);
+  say(ok, ok ? 'selftest passed' : 'selftest failed');
+  document.title = ok ? 'selftest passed' : 'selftest failed';
+  document.body.dataset.selftest = ok ? 'passed' : 'failed';
+};
+
 // ---- MAPED-EDIT6's self-test (?selftest=edit6): CM_Grove's drags with what is joined, a cut-off part, CM_Marsh's
 // bots' points and a prop on the water, the fit that follows the canvas; every edit undone, nothing saved -----------
 
@@ -1641,14 +2648,25 @@ ED.selftests.edit6 = async function selftestEdit6() {
   // (4) the fit follows the canvas while the view is untouched
   ok &= say(S.fitted, 'the view is fit after opening');
   const box = cv.getBoundingClientRect(), want = s => Math.abs(S.view.scale - Math.min(cv.width, cv.height) / ((+S.doc.size) * 1.06)) < 1e-6 && s;
+  // The fit follows through the canvas's ResizeObserver, whose callbacks come only in a drawn frame. Under a
+  // virtual-time budget headless Edge draws none while the timers run (no animation frame in 3 s of virtual
+  // time), so run this mode in real time (DEVELOPING.md *Self-tests*); a wait that saw no frame says so.
+  const resized = async (fn, ms) => {
+    let frames = 0, on = true;
+    const tick = () => { if (on) { frames++; requestAnimationFrame(tick); } };
+    requestAnimationFrame(tick);
+    await until(fn, ms);
+    on = false;
+    return frames ? '' : ' (no frame drawn while it waited: run edit6 in real time, not under a virtual-time budget)';
+  };
   const w0 = cv.width;
   cv.style.width = Math.round(box.width / 2) + 'px';
-  await until(() => cv.width < w0, 3000);
-  ok &= say(cv.width < w0 && want(true), `the canvas narrowed to ${cv.width} px: the map fit again (${S.view.scale.toFixed(3)} px a metre)`);
+  let note = await resized(() => cv.width < w0, 3000);
+  ok &= say(cv.width < w0 && want(true), `the canvas narrowed to ${cv.width} px: the map fit again (${S.view.scale.toFixed(3)} px a metre)` + (cv.width < w0 ? '' : note));
   cv.style.width = box.width + 'px'; // back to its size (then the stylesheet's 100 % again)
-  await until(() => cv.width === w0, 3000);
+  note = await resized(() => cv.width === w0, 3000);
   cv.style.width = '';
-  ok &= say(cv.width === w0 && want(true), `the canvas back to ${cv.width} px: fit again (${S.view.scale.toFixed(3)})`);
+  ok &= say(cv.width === w0 && want(true), `the canvas back to ${cv.width} px: fit again (${S.view.scale.toFixed(3)})` + (cv.width === w0 ? '' : note));
   // (1) a well dragged with its clearing and the ends of its paths
   const sh = () => shapes();
   const wellSel = { t: 'obj', path: ['wells', 1, 'pos'] };
@@ -1662,11 +2680,11 @@ ED.selftests.edit6 = async function selftestEdit6() {
   await settle();
   ok &= say(near(sh()[7].circle, [-130, -60]) && near(sh()[8].path[0], [-130, -60]), 'undo: one step puts them all back');
   // the same drag with the option off moves the well alone
-  $('optJoined').checked = false;
+  S.joined = false;
   await drag(wellSel, [-136, -66]);
   ok &= say(near(getAt(S.doc, wellSel.path), [-136, -66]) && near(sh()[7].circle, [-130, -60]), 'option off: only the well moved');
   undo();
-  $('optJoined').checked = true;
+  S.joined = true;
   await settle();
   // a lane knot: lane 1's knot 2 (-174, -30) to (-182, -35); the shapes beside its legs follow by their place on them
   const knotSel = { t: 'knot', l: 0, k: 2 };
@@ -1729,8 +2747,8 @@ ED.selftests.edit6 = async function selftestEdit6() {
 
 // ---- start ------------------------------------------------------------------------------------------------
 
-(async function start() {
-  renderOverlays();
+// start runs when every part of the page has loaded (the frame and the parts register first)
+window.addEventListener('DOMContentLoaded', async function start() {
   renderTabs();
   setTool('select');
   await loadState();
@@ -1754,4 +2772,4 @@ ED.selftests.edit6 = async function selftestEdit6() {
       document.body.dataset.selftest = 'failed';
     }
   }
-})();
+});

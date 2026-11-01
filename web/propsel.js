@@ -65,20 +65,20 @@ const PS = (() => {
 
   // ---- the handles: turn (round, east of the centre, turning with the drag) and scale (square, south) -------------
 
-  function handles(s) {
+  function handles(s, v) { // v: the view (the handles at least 24 pixels out there)
     const es = entries(s);
     if (!es) return null;
     const c = centre(es);
     let R = 0;
     es.forEach(e => { const p = pos3(e.pos); R = Math.max(R, Math.hypot(p[0] - c[0], p[1] - c[1]) + entryRadius(e)); });
-    R = Math.max(R, 24 * dpr / S.view.scale);
+    R = Math.max(R, 24 * vmpp(v || VIEW2D, c));
     const a = (s.ang || 0) * Math.PI / 180;
     return { anchor: c, R, rot: [c[0] + R * Math.cos(a), c[1] + R * Math.sin(a)], scale: [c[0], c[1] - R] };
   }
 
-  function hitFirst(sx, sy, w, near) {
+  function hitFirst(sx, sy, w, near, pk) {
     if (!S.show.props || !isMulti(S.sel)) return null;
-    const hd = handles(S.sel);
+    const hd = handles(S.sel, (pk && ED.views[pk.view]) || VIEW2D);
     const base = { ks: S.sel.ks, box: S.sel.box, ang: S.sel.ang || 0 };
     if (hd && near(hd.rot, 8)) return { sel: Object.assign({ t: 'msrotate' }, base) };
     if (hd && near(hd.scale, 8)) return { sel: Object.assign({ t: 'msscale' }, base) };
@@ -157,7 +157,7 @@ const PS = (() => {
 
   // ---- the mouse: Shift/Ctrl+click, the box, dragging the selection -----------------------------------------------
 
-  function down(h, e, w) {
+  function down(h, e, w, pk) { // pk: the view's pick (app.js inputDown); the box's click test on its screen
     if (!S.doc || S.tool !== 'select') return false;
     const mod = !!(e && (e.shiftKey || e.ctrlKey || e.metaKey));
     const onProp = h && h.sel.t === 'prop';
@@ -169,15 +169,30 @@ const PS = (() => {
     }
     if (!mod && h) return false; // a plain click on something: app.js selects it
     // a box (a drag on empty ground, or with Shift or Ctrl); without a move it is a click
-    const sx0 = w2s(w);
-    Q.box = { a: w, b: w, mode: e && (e.ctrlKey || e.metaKey) ? 'toggle' : e && e.shiftKey ? 'add' : 'replace', h };
+    const v = (pk && ED.views[pk.view]) || VIEW2D, sx0 = v.project(w);
+    const mode = e && (e.ctrlKey || e.metaKey) ? 'toggle' : e && e.shiftKey ? 'add' : 'replace';
+    if (v.drape && pk) { // 3-D: the box is the screen's rectangle (what it touches as seen)
+      Q.box = { a: w, b: w, mode, h, view: v.id, s0: [pk.sx, pk.sy], s1: [pk.sx, pk.sy] };
+      S.grab = {
+        move(w2, e2) { if (e2 && v.xy) Q.box.s1 = v.xy(e2); render(); },
+        up() {
+          const b = Q.box;
+          Q.box = null;
+          if (Math.hypot(b.s1[0] - b.s0[0], b.s1[1] - b.s0[1]) < 4 * dpr) click(b.h, b.mode);
+          else screenBoxSelect(v, b.s0, b.s1, b.mode);
+          render();
+        },
+      };
+      return true;
+    }
+    Q.box = { a: w, b: w, mode, h };
     S.grab = {
       move(w2) { Q.box.b = w2; render(); },
       up() {
         const b = Q.box;
         Q.box = null;
-        const s1 = w2s(b.b);
-        if (Math.hypot(s1[0] - sx0[0], s1[1] - sx0[1]) < 4 * dpr) click(b.h, b.mode);
+        const s1 = v.project(b.b);
+        if (!s1 || !sx0 || Math.hypot(s1[0] - sx0[0], s1[1] - sx0[1]) < 4 * dpr) click(b.h, b.mode);
         else boxSelect(rectOf(b.a, b.b), b.mode);
         render();
       },
@@ -194,8 +209,38 @@ const PS = (() => {
     select(multi(ks.concat([k]), box));
   }
 
+  // entriesOnScreen lists the props entries a screen rectangle of the view v touches: a marker's ring (its radius at
+  // its distance) or a group's anchor, as the view shows them (the 3-D view's box)
+  function entriesOnScreen(v, s0, s1) {
+    if (!S.show.props) return [];
+    const r = rectOf(s0, s1), out = new Set();
+    const onScreen = (p, rad) => {
+      const s = v.project(p);
+      return !!s && touches(s, rad * v.ppm(p), r);
+    };
+    for (const it of live()) {
+      if (it.kind !== 'prop' || it.card || (it.team === 2 && !S.show.mirror)) continue;
+      if (onScreen([it.pos[0], it.pos[1]], radius(it.noun, it.scale))) out.add(it.k);
+    }
+    props().forEach((c, k) => {
+      if (!c || !c.group) return;
+      const p = pos3(c.pos);
+      if (onScreen([p[0], p[1]], 0) || (S.show.mirror && !isOnce(c) && onScreen([-p[0], -p[1]], 0))) out.add(k);
+    });
+    return [...out];
+  }
+  // screenBoxSelect: the 3-D view's box; the box kept for a split is the ground under its corners (their bounds)
+  function screenBoxSelect(v, s0, s1, mode) {
+    const found = entriesOnScreen(v, s0, s1);
+    const cs = [[s0[0], s0[1]], [s1[0], s0[1]], [s1[0], s1[1]], [s0[0], s1[1]]].map(s => v.pickAt(s[0], s[1])).filter(Boolean).map(pk => pk.w);
+    const r = cs.length === 4 ? [Math.min(...cs.map(p => p[0])), Math.min(...cs.map(p => p[1])), Math.max(...cs.map(p => p[0])), Math.max(...cs.map(p => p[1]))] : null;
+    applyBox(found, r, mode);
+  }
+
   function boxSelect(r, mode) {
-    const found = entriesIn(r);
+    applyBox(entriesIn(r), r, mode);
+  }
+  function applyBox(found, r, mode) {
     let ks = mode === 'replace' ? [] : selKs(S.sel);
     if (mode === 'toggle') { for (const k of found) ks = ks.includes(k) ? ks.filter(x => x !== k) : ks.concat([k]); } else ks = ks.concat(found);
     select(multi(ks, found.length ? r : null));
@@ -322,57 +367,58 @@ const PS = (() => {
 
   // ---- drawing ------------------------------------------------------------------------------------------------
 
-  function drawOver() {
+  // drawOver draws the multiple selection (rings, the groups' outlines, the kept box, the handles) and the box being
+  // dragged through the view v (2-D: the 'draw' 'over' phase; 3-D: ED.marks, draped; its dragged box on the screen)
+  function drawOver(v) {
     if (!S.doc) return;
-    ctx.save();
+    v = v && v.overlay ? v : VIEW2D;
+    const g = v.overlay;
+    g.save();
     if (S.show.props && isMulti(S.sel) && entries(S.sel)) {
       const ks = new Set(S.sel.ks);
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 1.5 * dpr;
+      g.strokeStyle = '#fff';
+      g.lineWidth = 1.5 * dpr;
       for (const it of live()) {
         if (it.kind !== 'prop' || !ks.has(it.k) || it.card || (it.team === 2 && !S.show.mirror)) continue;
-        const s = w2s(it.pos);
-        ctx.globalAlpha = it.team === 2 ? 0.5 : 1;
-        ctx.beginPath();
-        ctx.arc(s[0], s[1], Math.max(4 * dpr, radius(it.noun, it.scale) * S.view.scale) + 2 * dpr, 0, 2 * Math.PI);
-        ctx.stroke();
+        const at = [it.pos[0], it.pos[1]], mpp = vmpp(v, at);
+        g.globalAlpha = it.team === 2 ? 0.5 : 1;
+        vring(v, at, Math.max(4 * mpp, radius(it.noun, it.scale)) + 2 * mpp);
+        g.stroke();
       }
-      ctx.globalAlpha = 1;
-      ctx.setLineDash([3 * dpr, 3 * dpr]);
+      g.globalAlpha = 1;
+      g.setLineDash([3 * dpr, 3 * dpr]);
       for (const k of ks) {
         const out = groupOutline(props()[k]);
         if (!out) continue;
-        ctx.beginPath();
-        out.forEach((q, i) => { const v = w2s(q); if (i) ctx.lineTo(v[0], v[1]); else ctx.moveTo(v[0], v[1]); });
-        ctx.closePath();
-        ctx.stroke();
+        vpoly(v, out, true);
+        g.stroke();
       }
       if (S.sel.box) { // the box the groups' members can be split out with
-        const r = S.sel.box, a = w2s([r[0], r[3]]), b = w2s([r[2], r[1]]);
-        ctx.strokeStyle = 'rgba(255,214,102,0.9)';
-        ctx.strokeRect(a[0], a[1], b[0] - a[0], b[1] - a[1]);
+        const r = S.sel.box;
+        g.strokeStyle = 'rgba(255,214,102,0.9)';
+        vpoly(v, [[r[0], r[3]], [r[2], r[3]], [r[2], r[1]], [r[0], r[1]]], true);
+        g.stroke();
       }
-      ctx.setLineDash([]);
-      const hd = handles(S.sel), a = w2s(hd.anchor), ro = w2s(hd.rot), sc = w2s(hd.scale);
-      ctx.strokeStyle = '#fff';
-      ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(ro[0], ro[1]); ctx.stroke();
-      ctx.fillStyle = S.sel.t === 'msrotate' ? '#58a6ff' : '#fff';
-      ctx.beginPath(); ctx.arc(ro[0], ro[1], 5 * dpr, 0, 2 * Math.PI); ctx.fill();
-      ctx.fillStyle = S.sel.t === 'msscale' ? '#58a6ff' : '#fff';
-      ctx.fillRect(sc[0] - 4.5 * dpr, sc[1] - 4.5 * dpr, 9 * dpr, 9 * dpr);
-      ctx.fillStyle = '#fff';
-      ctx.fillRect(a[0] - 3 * dpr, a[1] - 3 * dpr, 6 * dpr, 6 * dpr);
+      g.setLineDash([]);
+      const hd = handles(S.sel, v);
+      g.strokeStyle = '#fff';
+      vpoly(v, [hd.anchor, hd.rot]); g.stroke();
+      vmark(v, hd.rot, 'round', 5, S.sel.t === 'msrotate' ? '#58a6ff' : '#fff');
+      vmark(v, hd.scale, 'square', 4.5, S.sel.t === 'msscale' ? '#58a6ff' : '#fff');
+      vmark(v, hd.anchor, 'square', 3, '#fff');
     }
-    if (Q.box) { // the box being dragged
-      const a = w2s(Q.box.a), b = w2s(Q.box.b);
-      ctx.strokeStyle = '#fff';
-      ctx.fillStyle = 'rgba(88,166,255,0.12)';
-      ctx.lineWidth = 1 * dpr;
-      ctx.setLineDash([4 * dpr, 3 * dpr]);
-      ctx.fillRect(a[0], a[1], b[0] - a[0], b[1] - a[1]);
-      ctx.strokeRect(a[0], a[1], b[0] - a[0], b[1] - a[1]);
+    if (Q.box && (Q.box.view || '2d') === v.id) { // the box being dragged (a screen rectangle in 3-D)
+      const a = Q.box.s0 || v.project(Q.box.a), b = Q.box.s1 || v.project(Q.box.b);
+      if (a && b) {
+        g.strokeStyle = '#fff';
+        g.fillStyle = 'rgba(88,166,255,0.12)';
+        g.lineWidth = 1 * dpr;
+        g.setLineDash([4 * dpr, 3 * dpr]);
+        g.fillRect(a[0], a[1], b[0] - a[0], b[1] - a[1]);
+        g.strokeRect(a[0], a[1], b[0] - a[0], b[1] - a[1]);
+      }
     }
-    ctx.restore();
+    g.restore();
   }
 
   // ---- the inspector -------------------------------------------------------------------------------------------
@@ -395,10 +441,10 @@ const PS = (() => {
         h('button', { title: 'Del', onclick: deleteSel }, 'Delete')));
     if (groups.length) {
       const total = groups.reduce((n, k) => n + members(k).length, 0);
-      el.append(h('div', { class: 'btns' },
+      el.append(adv(h('div', { class: 'btns' },
         s.box ? h('button', { title: 'The members inside the box (or whose mirror is) become single props; their group keeps the rest (the box becomes its hole)', disabled: !inBox, onclick: () => split(ks, s.box) }, `Split the box (${inBox} member${inBox === 1 ? '' : 's'})`) : null,
         h('button', { title: 'Every member of the selected groups becomes a single prop', onclick: () => split(ks, null) }, `Split the group${groups.length > 1 ? 's' : ''} (${total})`)),
-      h('p', { class: 'small' }, 'Split takes each member\'s noun, place, height, turn, scale and tilt from the last check (it needs the game files). The single props are copies of the noun\'s first shipped marker: a member\'s own settings (a light\'s colour, an effect\'s parameters) are not kept.'));
+      h('p', { class: 'small' }, 'Split takes each member\'s noun, place, height, turn, scale and tilt from the last check (it needs the game files). The single props are copies of the noun\'s first shipped marker: a member\'s own settings (a light\'s colour, an effect\'s parameters) are not kept.')));
     }
     const list = h('div', { class: 'small proplist' });
     for (const k of ks.slice(0, 40)) {
@@ -417,9 +463,12 @@ const PS = (() => {
   const inner = ED.keys;
   ED.keys = e => keys(e) || (inner ? inner(e) : false);
   ED.on('draw', phase => { if (phase === 'over') drawOver(); });
+  ED.marks.push(drawOver); // the 3-D view's overlay
   ED.on('open', () => { Q.box = null; });
   cv.addEventListener('mouseenter', () => { Q.over = true; });
   cv.addEventListener('mouseleave', () => { Q.over = false; });
+  V3D.V.canvas.addEventListener('mouseenter', () => { Q.over = true; }); // Ctrl+V pastes at the mouse in 3-D too
+  V3D.V.canvas.addEventListener('mouseleave', () => { Q.over = false; });
 
   // ---- the self-test (?selftest=propsel): the real mouse and key events on CM_Ring ------------------------------
 

@@ -19,12 +19,26 @@
 (function () {
   const GRASS = { game: 'environments/anshavar/textures/OutsouceGroundMap02_D.dds', archive: 'anshavar3.snap' };
   const DISC = { game: 'environments/anshavar/textures/Mine_Disc_01_D.dds', archive: 'anshavar3.snap' };
-  const AUTO = ['', 'all', 'floor', 'high', 'slope', 'chasm', 'bushes'];
+  const AUTO = ['', 'all', 'floor', 'high', 'slope', 'chasm', 'bushes', 'lanes', 'edge'];
+  // the rules that derive the art from the gameplay shapes (mapc's DerivedRule): worked out again from the lanes, walls
+  // and chasms at every bake; View > Hide Derived Art leaves them out (with the scatters' props)
+  const DERIVED = new Set(['lanes', 'edge']);
+  const DIRT = { procedural: 'dirt' };
+  // the one-click layers of Apply Texture (the templates' own: CM_Ring's path and cliff foot, CM_Marsh's pond rim)
+  const PRESETS = [
+    { id: 'lanepath', label: '+ Lane path', tip: 'A lighter path down every lane (10 m wide); it follows the lanes when you move them',
+      layer: { name: 'lane path', texture: DIRT, scale: 16, break: 0.6, tint: [1.45, 1.36, 1.18], vary: 0.1, auto: 'lanes', width: 10, soft: 3, noise: 1.2 } },
+    { id: 'clifffoot', label: '+ Cliff foot', tip: 'A darker band along the foot of the walls (1 m up their slope to 3 m out); it follows the walls',
+      layer: { name: 'cliff foot', texture: DIRT, scale: 12, tint: [0.72, 0.68, 0.64], opacity: 0.8, auto: 'edge', range: [-1, 3], along: 'walls', soft: 2, noise: 1.5 } },
+    { id: 'chasmrim', label: '+ Chasm rim', tip: 'A dark rim round the chasms and ponds (1 m down to 2.5 m out); it follows the chasms',
+      layer: { name: 'chasm rim', texture: DIRT, scale: 10, tint: [0.55, 0.52, 0.44], auto: 'edge', range: [-1, 2.5], along: 'chasms', soft: 2, noise: 1 } },
+  ];
+  S.hideDerived = false; // View > Hide Derived Art (the bake and the 3-D ground with ?derived=0, the scatters' props hidden)
   const RASTER = 1024; // a painted picture's side (pixels over the level's square)
 
   const G = {
     layer: 1, stamp: -1,
-    brush: { size: 8, soft: 3, erase: false, raster: false },
+    brush: S.brush, // the brush the Terrain tab shares with the cliffs (app.js): size, soft, erase, raster, shape
     stroke: null, mouse: null, drag: null,
     stampRef: DISC, stampSize: 16,
     bake: null, bakeOn: true, bakeAlpha: 1, showMask: false, showStrokes: true,
@@ -93,6 +107,20 @@
     if (t && t.rgb) return `rgb(${t.rgb.map(v => Math.round(v)).join(',')})`;
     if (t && t.procedural) return '#7a5a3c';
     return '#333';
+  }
+  // ruleText says where a layer's rule paints (the tiles' line, the tooltips); short: for a tile's 60-px line
+  const isDerived = l => !!l && DERIVED.has(l.auto);
+  const edgeRange = l => Array.isArray(l.range) && l.range.length === 2 ? l.range : [0, 6];
+  const minus = v => String(v).replace('-', '−');
+  const edgeOf = l => l.along === 'walls' ? 'walls' : l.along === 'chasms' ? 'chasms' : 'walls and chasms';
+  function ruleText(l, short) {
+    if (!l || !l.auto) return '';
+    if (l.auto === 'lanes') return short ? 'follows lanes' : 'follows the lanes' + (l.width ? ` (${l.width} m wide)` : " (each lane's width)");
+    if (l.auto === 'edge') {
+      const r = edgeRange(l), span = `${minus(r[0])}–${minus(r[1])} m`;
+      return short ? `${l.along === 'chasms' ? 'chasm' : l.along === 'walls' ? 'wall' : 'edge'} ${span}` : `follows the edge of the ${edgeOf(l)} (${span})`;
+    }
+    return { all: 'everywhere', floor: 'the floor', high: 'high ground', slope: 'slopes', chasm: 'in the chasms', bushes: 'under the bushes' }[l.auto] || 'rule: ' + l.auto;
   }
 
   // ---- pictures: the palette's thumbnails, the package's PNGs -------------------------------------------
@@ -303,7 +331,10 @@
     let sh;
     const thin = simplify(pts, Math.max(0.15, size / 20)).map(p => [r1g(p[0]), r1g(p[1])]);
     const span = Math.max(...pts.map(p => Math.hypot(p[0] - pts[0][0], p[1] - pts[0][1])));
-    if (pts.length < 2 || span < size / 4) sh = { circle: [r1g(pts[0][0]), r1g(pts[0][1])], r: r1g(size / 2) };
+    if ((pts.length < 2 || span < size / 4) && b.shape === 'square') { // a dab of the square brush
+      const c = pts[0], hs = size / 2;
+      sh = { polygon: [[r1g(c[0] - hs), r1g(c[1] - hs)], [r1g(c[0] + hs), r1g(c[1] - hs)], [r1g(c[0] + hs), r1g(c[1] + hs)], [r1g(c[0] - hs), r1g(c[1] + hs)]] };
+    } else if (pts.length < 2 || span < size / 4) sh = { circle: [r1g(pts[0][0]), r1g(pts[0][1])], r: r1g(size / 2) };
     else sh = { path: thin, width: r1g(size) };
     sh.soft = r1g(b.soft);
     if (b.erase) sh.erase = true;
@@ -312,7 +343,7 @@
   // canPaint says why the selected layer can't take a stroke ('' when it can).
   function canPaint() {
     if (!S.doc) return 'open a map';
-    if (!baked()) return 'the ground is not painted yet: press "Paint this ground" in the Ground pane';
+    if (!baked()) return 'the ground is not painted yet: press "Paint this ground" (Terrain > Apply Texture)';
     if (!cur()) return 'select a layer';
     if (G.layer === 0 && !pic()) return 'the first layer lies under all others and has no mask: select another layer';
     return '';
@@ -425,10 +456,15 @@
 
   // ---- the canvas tools --------------------------------------------------------------------------------
 
+  // the texture tool: the Terrain tab's draw mode (app.js S.draw) on the chosen layer's mask: the brush strokes as
+  // before; Polygon, Circle and Path go through app.js's drawing and come back as drawn(sh), a mask shape
   ED.tools.paint = {
-    down(w) {
+    tab: 'terrain',
+    status: () => `${drawLabel()} \u00B7 ${(cur() && cur().name) || 'layer ' + G.layer}${G.brush.erase ? ' (erase)' : ''}${G.brush.raster && S.draw === 'brush' ? ', into the picture' : ''}`,
+    down(w, e) {
       const why = canPaint();
       if (why) { log('paint: ' + why, 'err'); return; }
+      if (S.draw !== 'brush') { drawDown(w, e); return; }
       G.stroke = { pts: [w] };
       if (G.brush.raster) { const r = rasterFor(G.layer); G.stroke.raster = r; rasterSegment(r, w, w); }
       render();
@@ -453,6 +489,18 @@
       if (s.raster) commitRaster(G.layer, false);
       else addStroke(s.pts);
       render();
+    },
+    drawn(sh) { // a polygon, circle or path drawn on the layer's mask, with the brush's soft edge (and erase)
+      const why = canPaint();
+      if (why) { log('paint: ' + why, 'err'); return; }
+      const m = JSON.parse(JSON.stringify(sh)), k = G.layer;
+      m.soft = r1g(G.brush.soft);
+      if (G.brush.erase) m.erase = true;
+      edit(d => {
+        const l = ensureLayers(d)[k];
+        l.shapes = Array.isArray(l.shapes) ? l.shapes : [];
+        l.shapes.push(m);
+      });
     },
   };
 
@@ -482,6 +530,9 @@
     return G.stamp;
   }
   ED.tools.stamp = {
+    tab: 'terrain',
+    hint: 'Stamp: a click places the stamp\'s picture, a drag moves a stamp; Del deletes the chosen one. Esc ends.',
+    status: () => 'Stamp: ' + refName(G.stampRef),
     down(w) {
       const hit = stampAt(w);
       if (hit) {
@@ -499,7 +550,7 @@
       if (dr) {
         let dx = w[0] - dr.start[0], dy = w[1] - dr.start[1];
         if (dr.mirrored) { dx = -dx; dy = -dy; }
-        if (!dr.moved && Math.hypot(dx, dy) * S.view.scale < 3) return;
+        if (!dr.moved && Math.hypot(dx, dy) < 3 * vmpp(ED.views[S.press] || ED.active(), w)) return; // 3 pixels in the view dragged in
         if (!dr.moved) { pushUndo(); dr.moved = true; }
         stamps()[dr.i].pos = [r1g(dr.orig[0] + dx), r1g(dr.orig[1] + dy)];
         changed(true);
@@ -622,23 +673,79 @@
       g.drawImage(r.c, a[0], a[1], b[0] - a[0], b[1] - a[1]);
       g.restore();
     }
-    if (paintMode && G.mouse) { // the brush: its size and, dashed, where its soft edge ends
-      const q = w2s(G.mouse), sc = S.view.scale;
-      g.save();
-      g.strokeStyle = G.brush.erase ? '#ff6b6b' : '#fff';
-      g.lineWidth = 1.5 * dpr;
-      g.beginPath(); g.arc(q[0], q[1], G.brush.size / 2 * sc, 0, 2 * Math.PI); g.stroke();
-      if (G.brush.soft > 0) {
-        g.setLineDash([3 * dpr, 4 * dpr]);
-        g.beginPath(); g.arc(q[0], q[1], (G.brush.size / 2 + G.brush.soft / 2) * sc, 0, 2 * Math.PI); g.stroke();
-      }
-      g.restore();
+  });
+  // the texture brush under the mouse: its size and, dashed, where its soft edge ends; through the view v (a preview)
+  ED.previews.push(v => {
+    if (!baked() || S.tool !== 'paint' || !G.mouse || S.draw !== 'brush') return;
+    if (!v.project(G.mouse)) return;
+    const g = v.overlay, sq = G.brush.shape === 'square';
+    const outline = r => { if (sq) vsquare(v, G.mouse, r); else vring(v, G.mouse, r); g.stroke(); }; // draped in 3-D
+    g.save();
+    g.strokeStyle = G.brush.erase ? '#ff6b6b' : '#fff';
+    g.lineWidth = 1.5 * dpr;
+    outline(G.brush.size / 2);
+    if (G.brush.soft > 0) {
+      g.setLineDash([3 * dpr, 4 * dpr]);
+      outline(G.brush.size / 2 + G.brush.soft / 2);
     }
+    g.restore();
+  });
+  // 3-D (EDUX4; the 2-D canvas draws these in its 'render' handler above): the texture stroke being drawn and its
+  // mirror as bands on the ground, and the stamps' outlines while the Paint or Stamp tool is armed
+  ED.previews.push(v => {
+    if (!v.drape || !S.doc || !baked()) return;
+    const g = v.overlay, s = G.stroke, l = cur();
+    g.save();
+    if (s && !s.raster && s.pts.length) {
+      const pts = s.pts.concat(G.mouse ? [G.mouse] : []);
+      g.strokeStyle = G.brush.erase ? 'rgba(255,90,90,0.9)' : 'rgba(255,220,90,0.9)'; // its outline: the paint shows inside
+      vband(v, pts, Math.max(0.5, G.brush.size));
+      if (!l || l.mirror !== false) { g.setLineDash([6 * dpr, 6 * dpr]); g.lineWidth = 1.5 * dpr; vpoly(v, pts.map(p => [-p[0], -p[1]])); g.stroke(); g.setLineDash([]); }
+    }
+    if (S.tool === 'paint' || S.tool === 'stamp') {
+      stamps().forEach((st, i) => {
+        if (!Array.isArray(st.pos) || !Array.isArray(st.size)) return;
+        for (const m of st.mirror === false ? [false] : [false, true]) {
+          const c = m ? [-st.pos[0], -st.pos[1]] : st.pos, rot = ((st.rot || 0) + (m ? 180 : 0)) * Math.PI / 180;
+          const hw = st.size[0] / 2, hh = st.size[1] / 2, co = Math.cos(rot), si = Math.sin(rot);
+          const at = (u, w) => [c[0] + u * co - w * si, c[1] + u * si + w * co];
+          g.strokeStyle = i === G.stamp && S.tool === 'stamp' ? '#58a6ff' : '#e0c060';
+          g.lineWidth = (i === G.stamp && S.tool === 'stamp' ? 2 : 1) * dpr;
+          g.setLineDash(m ? [5 * dpr, 5 * dpr] : []);
+          if (st.round) { const pts = []; for (let k = 0; k < 32; k++) { const a = 2 * Math.PI * k / 32; pts.push(at(hw * Math.cos(a), hh * Math.sin(a))); } vpoly(v, pts, true); }
+          else vpoly(v, [at(-hw, -hh), at(hw, -hh), at(hw, hh), at(-hw, hh)], true);
+          g.stroke();
+          vpoly(v, [c, at(0, hh)]); g.stroke(); // its top (north at rot 0)
+        }
+      });
+    }
+    g.restore();
   });
 
   // ---- the bake preview ----------------------------------------------------------------------------------
 
-  const bakeKey = () => S.doc ? JSON.stringify([S.doc.size, S.doc.terrain, S.doc.lanes, S.doc.base, S.doc.wells, S.doc.ground]) : '';
+  // the bake under the 2-D view now ({img, half, from: the map.json text it was baked from}), else null (relief.js)
+  ED.bakeShown = () => (S.doc && baked() && G.bakeOn && G.bake && G.bake.img.complete && G.bake.img.naturalWidth ? G.bake : null);
+  // what the live texture paint needs (relief.js): the stroke being drawn on a layer's mask (null for the picture's
+  // brush, which shows its own), a texture's picture URL (a game texture's 512-px thumbnail once made: asked for here)
+  // or flat colour, the first layer with a mask
+  const thumbAsked = new Set();
+  ED.groundLive = {
+    stroke: () => {
+      const s = G.stroke;
+      if (S.tool !== 'paint' || !s || s.raster || !s.pts.length || !baked()) return null;
+      return { k: G.layer, sh: { path: s.pts.concat(G.mouse ? [G.mouse] : []), width: G.brush.size, soft: G.brush.soft, erase: G.brush.erase || undefined } };
+    },
+    texURL(t) {
+      const u = refURL(t, true);
+      if (!u && t && t.game && !thumbAsked.has(t.game)) { thumbAsked.add(t.game); thumbs([t.game], 512).then(() => { render(); if (typeof V3D !== 'undefined') V3D.redraw(); }); }
+      return u;
+    },
+    colour: refColour,
+    first: () => firstMasked(),
+  };
+  const bakeKey = () => S.doc ? JSON.stringify([S.doc.size, S.doc.terrain, S.doc.lanes, S.doc.base, S.doc.wells, S.doc.ground, !!S.hideDerived]) : '';
+  const bakeURL = pkg => '/api/bake/' + pkg + (S.hideDerived ? '?derived=0' : ''); // without the derived art: mapc bake --no-derived
   async function runBake() {
     if (!S.pkg || !baked()) return;
     const key = bakeKey();
@@ -646,13 +753,14 @@
     if (G.bakeBusy) { G.bakeAgain = true; return; }
     G.bakeBusy = true;
     status();
-    const pkg = S.pkg, t0 = performance.now();
+    const pkg = S.pkg, t0 = performance.now(), from = S.checkedJSON || ''; // the draft it bakes (the live preview's base)
     let res;
-    try { res = await api('POST', '/api/bake/' + pkg); } catch (e) { res = { ok: false, error: String(e) }; }
+    G.bakeURL = bakeURL(pkg);
+    try { res = await api('POST', G.bakeURL); } catch (e) { res = { ok: false, error: String(e) }; }
     G.bakeBusy = false;
     if (pkg === S.pkg && res.ok) {
       const img = new Image(), masks = {};
-      img.onload = () => { G.bake = { img, half: res.half_m, masks, n: res.n }; G.bakeN = res.n; render(); status(); };
+      img.onload = () => { G.bake = { img, half: res.half_m, masks, n: res.n, from }; G.bakeN = res.n; render(); status(); };
       img.src = res.url + 'ground.png';
       for (let k = firstMasked(); k < layers().length; k++) { const m = new Image(); m.src = res.url + 'mask_' + k + '.png'; masks[k] = m; }
       G.bakeKey = key;
@@ -665,24 +773,56 @@
     if (G.bakeAgain) { G.bakeAgain = false; runBake(); }
   }
 
-  // ---- the pane ------------------------------------------------------------------------------------------
+  // ---- the panes: Terrain > Apply Texture (the layers as tiles, erase, the stamps) and Brush; the windows Ground Layers
+  // in Detail and Stamps in Detail (Advanced) and Ground Bake and Cliff (Map); the menus' actions -----------------------
 
-  const pane = ED.addPane('right', 'Ground');
+  // (EDUX11: Apply Texture shows only while the Terrain tab's switch says Texture; its brush settings and Erase are in
+  // ED.drawSettings, under the draw mode: frame.js's Draw with group)
+  const pane = ED.addPane('terrain', 'Apply Texture', 12);
   const sec = pane.parentNode;
   sec.id = 'paneGround';
-  $('right').insertBefore(sec, $('right').firstChild);
-  const toolsEl = document.querySelector('#paneTools .tools');
-  for (const [t, label, tip] of [['paint', 'Paint', "Paint the selected ground layer's mask ([ ] size, X erase)"], ['stamp', 'Stamp', 'Place, select and drag ground stamps']]) {
-    const b = h('button', { 'data-tool': t, title: tip }, label);
-    b.onclick = () => setTool(t);
-    toolsEl.append(b);
-  }
+  pane.classList.add('gpane');
+  sec.firstChild.append(h('span', { class: 'k small' }, 'the ground layers'));
+  const brushPane = ED.drawSettings || h('div');
+  brushPane.classList.add('gpane');
+  const layersWin = ED.window('glayers', 'Ground Layers in Detail');
+  const stampsWin = ED.window('gstamps', 'Stamps in Detail');
+  const bakeWin = ED.window('gbake', 'Ground Bake and Cliff');
+  for (const w of [layersWin, stampsWin, bakeWin]) w.classList.add('gpane');
+  const fileIn = h('input', { type: 'file', accept: '.png,image/png', multiple: true, style: 'display:none', onchange: e => { const fs = [...e.target.files]; e.target.value = ''; if (fs.length) importGround(fs); } });
+  document.body.append(fileIn);
   const statusEl = h('div', { class: 'small gstatus' });
+  const statusEl2 = h('div', { class: 'small gstatus' });
   function status() {
     let t = !baked() ? 'not painted' : G.bakeBusy ? 'baking...' : G.bake ? `bake ${G.bakeN} shown (${G.bakeMs} ms)` : 'no bake yet';
-    statusEl.textContent = t;
+    if (baked() && S.hideDerived) t += '; derived art hidden (View)';
+    statusEl.textContent = statusEl2.textContent = t;
     document.body.dataset.groundBake = G.bakeBusy ? 'busy' : G.bake ? 'ready' : 'none';
   }
+  const needBaked = what => { if (!S.doc) { log('open a map first', 'err'); return false; } if (!baked()) { log(what + ': the ground is not painted yet (Terrain > Apply Texture: Paint this ground)', 'err'); return false; } return true; };
+  ED.actions['ground.bakeOn'] = () => { G.bakeOn = !G.bakeOn; renderPane(); render(); };
+  ED.flags['ground.bakeOn'] = () => G.bakeOn;
+  ED.actions['ground.mask'] = () => { G.showMask = !G.showMask; renderPane(); render(); };
+  ED.flags['ground.mask'] = () => G.showMask;
+  ED.actions['ground.raster'] = () => { G.brush.raster = !G.brush.raster; renderPane(); render(); };
+  ED.flags['ground.raster'] = () => G.brush.raster;
+  // View > Hide Derived Art: the bake (here) and the 3-D ground (view3d.js) again without the rules lanes and edge, the
+  // scatters' props hidden in both views (props.js); off again, the plain requests
+  ED.actions['ground.hideDerived'] = () => {
+    S.hideDerived = !S.hideDerived;
+    if (S.report && S.report.ok) runBake();
+    ED.emit('derived', S.hideDerived);
+    renderPane(); render();
+    if (typeof V3D !== 'undefined') V3D.redraw();
+    log(S.hideDerived ? 'derived art hidden: the lane paths, the edge bands and the scattered doodads' : 'derived art shown again', 'ok');
+  };
+  ED.flags['ground.hideDerived'] = () => !!S.hideDerived;
+  ED.actions['ground.layers'] = () => ED.openWindow('glayers');
+  ED.actions['ground.stamps'] = () => ED.openWindow('gstamps');
+  ED.actions['ground.bake'] = () => ED.openWindow('gbake');
+  ED.actions['ground.export'] = () => { if (needBaked('export')) { ED.openWindow('glayers'); exportGround(); } };
+  ED.actions['ground.import'] = () => { if (needBaked('import')) fileIn.click(); };
+  ED.actions['ground.flatten'] = () => { if (needBaked('flatten')) flatten(); };
 
   // field makes a labelled input bound to obj()[key]; an empty input removes the member.
   function field(label, obj, key, opt) {
@@ -716,72 +856,128 @@
     return h('button', { class: 'gtexbtn', title: ref && ref.game ? ref.game + ' (' + ref.archive + ')' : '', onclick: () => picker(title, kinds, onPick) }, sw, ' ' + refName(ref));
   }
   ED.texButton = texButton; // the void panel's backdrop (void.js) picks its texture with the same dialog
+  // swatch: a texture's thumbnail (filled in by fillThumbs once it is made)
+  function swatch(ref, cls) {
+    const sw = h('span', { class: 'gsw' + (cls ? ' ' + cls : '') });
+    const u = refURL(ref);
+    if (u) sw.append(h('img', { src: u, alt: '' })); else sw.style.background = refColour(ref);
+    if (!u && ref && ref.game) sw.dataset.path = ref.game;
+    return sw;
+  }
+  function fillThumbs(roots) {
+    const gl = [];
+    layers().forEach(l => { if (l.texture && l.texture.game) gl.push(l.texture.game); });
+    if (!gl.length) return;
+    thumbs(gl).then(() => roots.forEach(root => root.querySelectorAll('.gsw[data-path]').forEach(sw => {
+      const url = G.thumbs['128:' + sw.dataset.path];
+      if (url && !sw.firstChild) { sw.style.background = ''; sw.append(h('img', { src: url, alt: '' })); }
+    })));
+  }
 
   function renderPane() {
-    pane.textContent = '';
     status();
+    renderTexture();
+    renderBrush();
+    renderLayersWin();
+    renderStampsWin();
+    renderBakeWin();
+  }
+  const notPainted = () => [h('p', { class: 'hint' }, `The ground's style is "${(gr() && gr().style) || 'tiled'}": one texture per triangle. A painted ground is baked from texture layers, a brush and stamps.`),
+    h('button', { onclick: makeBaked }, 'Paint this ground')];
+
+  // Terrain > Apply Texture: the layers as tiles (top first; a click arms the brush on it), + New layer, Erase, the stamps
+  function renderTexture() {
+    pane.textContent = '';
+    sec.hidden = S.lastMaterial !== 'paint';
+    sec.classList.toggle('armed', S.tool === 'paint' || S.tool === 'stamp');
     if (!S.doc) { pane.append(h('p', { class: 'hint' }, 'Open a map.')); return; }
-    if (!baked()) {
-      pane.append(h('p', { class: 'hint' }, `The ground's style is "${(gr() && gr().style) || 'tiled'}": one texture per triangle. A painted ground is baked from layers, a brush and stamps into textures.`),
-        h('button', { onclick: makeBaked }, 'Paint this ground'));
-      return;
-    }
+    if (!baked()) { pane.append(...notPainted()); return; }
     const ls = layers();
     if (G.layer >= ls.length) G.layer = ls.length - 1;
-    pane.append(statusEl, h('div', { class: 'row' },
+    const tiles = h('div', { class: 'tiles' });
+    for (let k = ls.length - 1; k >= 0; k--) {
+      const l = ls[k], drv = isDerived(l) && k >= firstMasked();
+      const what = k === 0 && !pic() ? 'the base: under all others' : drv ? ruleText(l) + ': painted again from the gameplay shapes at every bake' : l.auto ? 'rule: ' + ruleText(l) : '';
+      tiles.append(h('div', { class: 'tile' + (k === G.layer ? ' on' : '') + (drv ? ' drv' : ''), 'data-k': k, title: (l.name || 'layer ' + k) + (what ? ' (' + what + ')' : ''),
+        onclick: () => { G.layer = k; setTool('paint'); renderPane(); render(); } },
+      h('div', { class: 'sw' }, swatch(l.texture, 'big')), h('div', { class: 'nm' }, l.name || 'layer ' + k),
+      drv ? h('div', { class: 'rl' }, ruleText(l, true)) : null));
+    }
+    tiles.append(h('div', { class: 'tile', title: 'A new layer above the selected one: pick its texture', 'data-new': '1',
+      onclick: () => { if (ls.length >= 12) { log('at most 12 layers', 'err'); return; } picker('The new layer\'s texture', ['game', 'package', 'colour', 'dirt'], ref => addLayer(ref)); } },
+    h('div', { class: 'sw' }, '+'), h('div', { class: 'nm' }, 'New layer...')));
+    const b = G.brush;
+    appendAll(pane, statusEl, tiles,
+      h('div', { class: 'row' }, h('span', { class: 'grow' }), h('a', { class: 'lnk', onclick: () => ED.openWindow('glayers') }, 'Layers in detail...')),
+      h('div', { class: 'note' }, S.tool === 'paint' ? (canPaint() || `Painting ${(cur() && cur().name) || 'layer ' + G.layer}${b.raster ? ' into its picture' : ''}; team 2's half gets the mirror (drawn dashed).`)
+        : 'Click a layer, then draw on the map (Draw with); team 2\'s half gets the mirror.'),
+      isDerived(cur()) && G.layer >= firstMasked() ? h('div', { class: 'note gdrv' }, `${cur().name || 'layer ' + G.layer} ${ruleText(cur())}: every bake paints it again from the ${cur().auto === 'lanes' ? 'lanes' : edgeOf(cur())}, so editing them moves it; what you paint adds to it. Its fields: Advanced > Ground Layers in Detail.`) : null,
+      // the layers that follow the gameplay shapes, one click each
+      h('div', { class: 'row gpresets' }, h('span', { class: 'small', title: 'Layers the bake paints from the lanes, walls and chasms by itself' }, 'Follow the map'),
+        ...PRESETS.map(p => h('button', { 'data-preset': p.id, title: p.tip, disabled: ls.length >= 12, onclick: () => addPreset(p) }, p.label))));
+    // the stamps: pictures laid on the ground
+    const sts = stamps();
+    const srow = h('div', { class: 'row' }, h('span', { class: 'small' }, 'Stamps'),
+      ...sts.map((st, i) => h('button', { class: i === G.stamp ? 'on' : '', title: refName(st.image) + (Array.isArray(st.pos) ? ` at (${st.pos.join(', ')})` : ''),
+        onclick: () => { G.stamp = i; if (Array.isArray(st.pos)) FR.centre(st.pos); setTool('stamp'); renderPane(); render(); } }, String(i + 1))),
+      texButton(G.stampRef, ref => { G.stampRef = ref; renderPane(); }, ['game', 'package'], 'The picture new stamps get'),
+      h('button', { class: S.tool === 'stamp' ? 'on' : '', title: 'The Stamp tool: a click places one, a drag moves one', onclick: () => setTool('stamp') }, '+ Stamp'));
+    pane.append(srow, h('div', { class: 'row' }, h('span', { class: 'grow' }), h('a', { class: 'lnk', onclick: () => ED.openWindow('gstamps') }, 'Stamps in detail...')));
+    fillThumbs([pane]);
+  }
+
+  // Terrain > Draw with's settings (EDUX11: in ED.drawSettings, under the draw mode): only what the draw mode and the
+  // material use: the size (2-32 m, [ ]) for Brush and Path (a Path's width), Circle/Square for the Brush, the soft
+  // edge and Erase (X) for textures; a cliff drawn as a Polygon or Circle has none
+  function renderBrush() {
+    brushPane.textContent = '';
+    const b = G.brush, tex = S.lastMaterial === 'paint', sized = S.draw === 'brush' || S.draw === 'path';
+    const soft = h('span', { class: 'small' }, b.soft + ' m');
+    appendAll(brushPane,
+      sized ? h('div', { class: 'row sizes' }, h('span', { class: 'small', title: '[ and ] change it' }, S.draw === 'path' ? 'Width (m)' : 'Size (m)'),
+        ...[2, 4, 8, 16, 32].map(v => h('button', { class: b.size === v ? 'on' : '', 'data-size': v, onclick: () => { b.size = v; renderPane(); updateHint(); render(); if (typeof FR !== 'undefined') FR.renderStatus(); } }, String(v))),
+        [2, 4, 8, 16, 32].includes(b.size) ? null : h('span', { class: 'small' }, b.size + ' m'), h('span', { class: 'k small' }, h('kbd', {}, '['), ' ', h('kbd', {}, ']'))) : null,
+      S.draw === 'brush' ? h('div', { class: 'row' }, h('span', { class: 'small' }, 'Shape'),
+        ...[['circle', '\u25EF Circle', 'A round brush'], ['square', '\u25A1 Square', 'A square brush: a click lays a square; a stroke is a band like the round one\'s']].map(([v, t, tip]) =>
+          h('button', { class: (b.shape || 'circle') === v ? 'on' : '', 'data-shape': v, title: tip, onclick: () => { b.shape = v; renderPane(); render(); if (typeof FR !== 'undefined') FR.renderStatus(); } }, t))) : null,
+      tex ? h('div', { class: 'row', title: 'The texture\'s soft edge' }, h('span', { class: 'small' }, 'Soft edge'),
+        h('input', { type: 'range', min: 0, max: 30, step: 0.5, value: b.soft, 'data-soft': '1', oninput: e => { b.soft = +e.target.value; soft.textContent = b.soft + ' m'; render(); } }), soft) : null,
+      tex ? h('div', { class: 'row' },
+        h('button', { class: b.erase ? 'on' : '', 'data-erase': '1', title: 'Erase the chosen layer where you paint (X)', onclick: () => { b.erase = !b.erase; if (S.tool !== 'paint') setTool('paint'); renderPane(); render(); } }, 'Erase ', h('kbd', {}, 'X')),
+        b.raster ? h('span', { class: 'small' }, 'into the picture (Tools)') : null) : null);
+  }
+
+  // Advanced > Ground Layers in Detail: the bake shown, the ground picture, the layers' order and every field
+  function renderLayersWin() {
+    const pane = layersWin;
+    pane.textContent = '';
+    if (!S.doc) { pane.append(h('p', { class: 'hint' }, 'Open a map.')); return; }
+    if (!baked()) { pane.append(...notPainted()); return; }
+    const ls = layers();
+    pane.append(statusEl2, h('div', { class: 'row' },
       h('label', { class: 'small' }, h('input', { type: 'checkbox', checked: G.bakeOn, onchange: e => { G.bakeOn = e.target.checked; render(); } }), ' show the bake'),
       h('input', { type: 'range', min: 0, max: 100, value: Math.round(G.bakeAlpha * 100), title: "the bake's opacity", oninput: e => { G.bakeAlpha = e.target.value / 100; render(); } }),
       h('label', { class: 'small' }, h('input', { type: 'checkbox', checked: G.showMask, onchange: e => { G.showMask = e.target.checked; render(); } }), ' mask')));
-
-    // the brush
-    if (S.tool === 'paint') {
-      const b = G.brush;
-      const num = (label, key, min, max) => {
-        const out = h('span', { class: 'small' }, String(b[key]));
-        return h('label', { class: 'gf' }, label + ' ', h('input', { type: 'range', min, max, step: 0.5, value: b[key], oninput: e => { b[key] = +e.target.value; out.textContent = b[key]; render(); } }), out);
-      };
-      pane.append(h('div', { class: 'gbrush' }, h('b', {}, 'Brush'), num('size (m)', 'size', 1, 60), num('softness (m)', 'soft', 0, 30),
-        h('div', { class: 'row' },
-          h('label', {}, h('input', { type: 'radio', name: 'gmode', checked: !b.erase, onchange: () => { b.erase = false; render(); } }), ' paint'),
-          h('label', {}, h('input', { type: 'radio', name: 'gmode', checked: b.erase, onchange: () => { b.erase = true; render(); } }), ' erase')),
-        h('div', { class: 'row', title: 'Strokes are shapes in map.json (diff-able); the picture is a PNG in the package (for heavy painting)' },
-          h('label', {}, h('input', { type: 'radio', name: 'ginto', checked: !b.raster, onchange: () => { b.raster = false; render(); } }), ' strokes'),
-          h('label', {}, h('input', { type: 'radio', name: 'ginto', checked: b.raster, onchange: () => { b.raster = true; render(); } }), ' into the picture')),
-        h('p', { class: 'hint' }, canPaint() || `Painting layer ${G.layer} (${(cur() && cur().name) || 'unnamed'}). The mirror for team 2 is drawn dashed.`)));
-    }
 
     // the layers, top first
     const list = h('div', { class: 'glayers' });
     for (let k = ls.length - 1; k >= 0; k--) {
       const l = ls[k];
       const n = Array.isArray(l.shapes) ? l.shapes.length : 0;
-      const what = k === 0 && !pic() ? 'base' : [l.auto, l.image ? 'picture' : '', n ? n + ' shapes' : ''].filter(Boolean).join(' + ') || 'no mask';
-      const sw = h('span', { class: 'gsw' });
-      const u = refURL(l.texture);
-      if (u) sw.append(h('img', { src: u, alt: '' })); else sw.style.background = refColour(l.texture);
-      if (!u && l.texture && l.texture.game) sw.dataset.path = l.texture.game; // filled once its thumbnail is made
+      const what = k === 0 && !pic() ? 'base' : [l.auto ? ruleText(l, isDerived(l)) : '', l.image ? 'picture' : '', n ? n + ' shapes' : ''].filter(Boolean).join(' + ') || 'no mask';
       list.append(h('div', { class: 'glayer' + (k === G.layer ? ' on' : ''), 'data-k': k, onclick: () => { G.layer = k; renderPane(); render(); } },
-        sw, h('span', { class: 'gname' }, l.name || 'layer ' + k), h('span', { class: 'small' }, what),
+        swatch(l.texture), h('span', { class: 'gname' }, l.name || 'layer ' + k), h('span', { class: 'small' + (isDerived(l) && k >= firstMasked() ? ' gdrv' : ''), title: l.auto ? ruleText(l) : '' }, what),
         h('button', { title: 'Up (drawn later)', disabled: k === ls.length - 1, onclick: e => { e.stopPropagation(); moveLayer(k, 1); } }, '▲'),
         h('button', { title: 'Down', disabled: k === 0, onclick: e => { e.stopPropagation(); moveLayer(k, -1); } }, '▼'),
         h('button', { title: 'Delete the layer', disabled: ls.length < 2 && !pic(), onclick: e => { e.stopPropagation(); deleteLayer(k); } }, '×')));
     }
     if (pic()) list.append(h('div', { class: 'glayer', title: "The ground's picture: painted tiles under every layer" },
       h('span', { class: 'gsw', style: 'background:#6a5a40' }), h('span', { class: 'gname' }, 'picture'), h('span', { class: 'small' }, `${pic().length} tiles (base)`)));
-    const gl = [];
-    ls.forEach(l => { if (l.texture && l.texture.game) gl.push(l.texture.game); });
-    if (gl.length) {
-      thumbs(gl).then(() => list.querySelectorAll('.gsw[data-path]').forEach(sw => {
-        const url = G.thumbs['128:' + sw.dataset.path];
-        if (url && !sw.firstChild) { sw.style.background = ''; sw.append(h('img', { src: url, alt: '' })); }
-      }));
-    }
     // the ground's picture: out to tiles and back in (painting in another program)
     const P = pic();
-    const fileIn = h('input', { type: 'file', accept: '.png,image/png', multiple: true, style: 'display:none', onchange: e => { const fs = [...e.target.files]; e.target.value = ''; if (fs.length) importGround(fs); } });
-    pane.append(h('div', { class: 'row' }, h('b', {}, 'Ground picture'), h('span', { class: 'grow' }),
+    appendAll(pane, h('div', { class: 'row' }, h('b', {}, 'Ground picture'), h('span', { class: 'grow' }),
       h('button', { title: "Write the bake's tiles at their full size (tile_<i>_<j>.png) to paint them in another program", disabled: !!G.ioBusy, onclick: () => exportGround() }, 'Export ground...'),
-      h('button', { title: "Use painted tiles (tile_<i>_<j>.png, each exactly a tile's size) as the ground under the layers", disabled: !!G.ioBusy, onclick: () => fileIn.click() }, 'Import ground...'), fileIn),
+      h('button', { title: "Use painted tiles (tile_<i>_<j>.png, each exactly a tile's size) as the ground under the layers", disabled: !!G.ioBusy, onclick: () => fileIn.click() }, 'Import ground...')),
       h('p', { class: 'hint' }, G.ioBusy || (P ? `${P.length} painted tiles lie under the layers (no mirror: team 2's half as painted).` : 'none: the first layer is the ground.'),
         P ? h('button', { onclick: removePicture }, 'Remove the picture') : null),
       G.exported && G.exported.pkg === S.pkg ? h('p', { class: 'hint gexport' }, 'Exported to ', h('code', {}, G.exported.dir), ': ',
@@ -803,11 +999,42 @@
         field('break', L, 'break', { def: 0, min: 0, max: 1, step: 0.05, tip: 'a second, turned copy breaks up the repeats' }),
         field('opacity', L, 'opacity', { def: 1, min: 0, max: 1, step: 0.05 }));
       if (G.layer >= firstMasked()) {
-        const auto = h('select', { onchange: e => { edit(() => { if (e.target.value) L().auto = e.target.value; else delete L().auto; }); renderPane(); } },
-          ...AUTO.map(a => h('option', { value: a, selected: (l.auto || '') === a }, a || '(none)')));
+        const auto = h('select', { onchange: e => {
+          edit(() => {
+            const t = L(), v = e.target.value;
+            if (v) t.auto = v; else delete t.auto;
+            if (v !== 'lanes') delete t.width; // the other rules' members aren't read (mapc warns)
+            if (v !== 'edge') { delete t.range; delete t.along; }
+          });
+          renderPane();
+        } }, ...AUTO.map(a => h('option', { value: a, selected: (l.auto || '') === a }, a ? a + (DERIVED.has(a) ? ' (follows the map)' : '') : '(none)')));
         const n = Array.isArray(l.shapes) ? l.shapes.length : 0;
         box.append(h('b', {}, 'Mask'), h('label', { class: 'gf', title: 'An automatic rule the brush adds to' }, 'rule ', auto));
         if (l.auto === 'slope') box.append(field('slope (°)', L, 'slope', { def: 35, min: 5, max: 85 }));
+        if (l.auto === 'lanes') box.append(field('width (m)', L, 'width', { min: 2, max: 120, tip: "the path's width, 2-120 m; empty: each lane's own width" }));
+        if (l.auto === 'edge') {
+          // range [from, to]: metres into the walkable ground from its edge (negative: up the wall's slope, down into the chasm)
+          const rangeIn = (label, i, tip) => {
+            const inp = h('input', { type: 'number', step: 'any', min: -20, max: 60, placeholder: String([0, 6][i]), title: tip, 'data-range': i });
+            if (Array.isArray(l.range)) inp.value = l.range[i];
+            inp.onchange = () => {
+              edit(() => {
+                const r = edgeRange(L()).slice(), v = inp.value.trim() === '' ? [0, 6][i] : Number(inp.value);
+                if (!Number.isFinite(v)) return;
+                r[i] = v;
+                if (r[0] === 0 && r[1] === 6) delete L().range; else L().range = r;
+              });
+              renderPane();
+            };
+            return h('label', { class: 'gf', title: tip }, label + ' ', inp);
+          };
+          const along = h('select', { 'data-along': '1', onchange: e => { edit(() => { if (e.target.value) L().along = e.target.value; else delete L().along; }); renderPane(); } },
+            ...[['', 'walls and chasms'], ['walls', 'walls'], ['chasms', 'chasms']].map(([v, t]) => h('option', { value: v, selected: (l.along || '') === v }, t)));
+          box.append(rangeIn('from (m)', 0, 'where the band starts, metres out from the edge (-20 to 60; negative: up the wall\'s slope or down into the chasm)'),
+            rangeIn('to (m)', 1, 'where the band ends, metres out from the edge (-20 to 60, more than from)'),
+            h('label', { class: 'gf', title: 'measure from the walls\' edge, the chasms\' edge, or both' }, 'along ', along));
+        }
+        if (isDerived(l)) box.append(h('p', { class: 'hint' }, `This layer ${ruleText(l)}: every bake paints it again from the map. Edge soft feathers the band's edges, edge noise moves them in and out.`));
         box.append(field('edge soft (m)', L, 'soft', { def: 2, min: 0, max: 50, tip: "the rule's and the strokes' edge (a stroke's own softness wins)" }),
           field('edge noise (m)', L, 'noise', { def: 0, min: 0, max: 20 }),
           field('mirror for team 2', L, 'mirror', { type: 'checkbox', def: true }),
@@ -820,11 +1047,18 @@
       } else box.append(h('p', { class: 'hint' }, 'The first layer is the ground under all others: it has no mask.'));
       pane.append(box);
     }
+    fillThumbs([pane]);
+  }
 
-    // stamps
+  // Advanced > Stamps in Detail: the list and every field of the chosen stamp
+  function renderStampsWin() {
+    const pane = stampsWin;
+    pane.textContent = '';
+    if (!S.doc) { pane.append(h('p', { class: 'hint' }, 'Open a map.')); return; }
+    if (!baked()) { pane.append(...notPainted()); return; }
     const sts = stamps();
     const slist = h('div', { class: 'glayers' });
-    sts.forEach((st, i) => slist.append(h('div', { class: 'glayer' + (i === G.stamp ? ' on' : ''), onclick: () => { G.stamp = i; if (Array.isArray(st.pos)) { S.view.x = st.pos[0]; S.view.y = st.pos[1]; S.fitted = false; } renderPane(); render(); } },
+    sts.forEach((st, i) => slist.append(h('div', { class: 'glayer' + (i === G.stamp ? ' on' : ''), onclick: () => { G.stamp = i; if (Array.isArray(st.pos)) FR.centre(st.pos); renderPane(); render(); } },
       h('span', { class: 'gname' }, refName(st.image)), h('span', { class: 'small' }, Array.isArray(st.pos) ? `(${st.pos.join(', ')})` : ''))));
     pane.append(h('div', { class: 'row' }, h('b', {}, 'Stamps'), h('span', { class: 'grow' }),
       texButton(G.stampRef, ref => { G.stampRef = ref; renderPane(); }, ['game', 'package'], 'The picture new stamps get'),
@@ -845,12 +1079,18 @@
         field('round', T, 'round', { type: 'checkbox', def: false }),
         field('mirror for team 2', T, 'mirror', { type: 'checkbox', def: true }),
         h('button', { onclick: () => { const i = G.stamp; edit(d => { d.ground.stamps.splice(i, 1); if (!d.ground.stamps.length) delete d.ground.stamps; }); G.stamp = -1; renderPane(); } }, 'Delete the stamp')));
-    }
+    } else if (sts.length) pane.append(h('p', { class: 'hint' }, 'Choose a stamp above, or click one on the map with the Stamp tool.'));
+  }
 
-    // the bake's settings and the cliff
+  // Map > Ground Bake and Cliff: the bake's texels, tiles and minimap, the cliff material
+  function renderBakeWin() {
+    const pane = bakeWin;
+    pane.textContent = '';
+    if (!S.doc) { pane.append(h('p', { class: 'hint' }, 'Open a map.')); return; }
+    if (!baked()) { pane.append(...notPainted()); return; }
     const GR = () => gr();
     const CL = () => gr() && gr().cliff;
-    const bs = h('details', { class: 'gprops' }, h('summary', {}, 'Bake settings and cliff'),
+    const bs = h('div', { class: 'gprops' },
       h('label', { class: 'gf', title: "a tile's side in texels" }, 'texels ', h('select', { onchange: e => { edit(() => { GR().texels = +e.target.value; }); } },
         ...[1024, 2048, 4096].map(v => h('option', { value: v, selected: (gr().texels || 2048) === v }, String(v))))),
       h('label', { class: 'gf' }, 'tiles a side ', h('select', { onchange: e => { edit(() => { GR().tiles = +e.target.value; }); } },
@@ -879,7 +1119,23 @@
     G.layer = at;
     setTool('paint');
     renderPane();
-    log(`layer ${at} added: paint its mask (Paint tool)`, 'ok');
+    log(`layer ${at} added: paint its mask (Terrain > Apply Texture)`, 'ok');
+  }
+  // addPreset adds one of PRESETS: the lane path on top, an edge band just above the last layer of the older rules (so
+  // the painted layers stay over it, as in the templates); the tool stays (the layer needs no painting)
+  function addPreset(p) {
+    if (!baked()) return;
+    const ls = layers();
+    if (ls.length >= 12) { log('at most 12 layers', 'err'); return; }
+    let at = ls.length;
+    if (p.layer.auto === 'edge') {
+      at = firstMasked();
+      ls.forEach((l, k) => { if (k === 0 || (l.auto && !DERIVED.has(l.auto)) || (isDerived(l) && l.auto === 'edge')) at = Math.max(at, k + 1); });
+    }
+    edit(d => { ensureLayers(d).splice(at, 0, JSON.parse(JSON.stringify(p.layer))); });
+    G.layer = at;
+    renderPane();
+    log(`layer "${p.layer.name}" added: it ${ruleText(p.layer)}; its fields: Advanced > Ground Layers in Detail`, 'ok');
   }
   function moveLayer(k, dir) {
     const j = k + dir;
@@ -990,10 +1246,11 @@
   ED.on('tool', () => { G.mouse = null; renderPane(); });
   window.addEventListener('keydown', e => {
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) || e.ctrlKey || e.metaKey) return;
-    if (S.tool === 'paint') {
-      if (e.key === '[') { G.brush.size = Math.max(1, G.brush.size - 1); renderPane(); render(); }
-      else if (e.key === ']') { G.brush.size = Math.min(60, G.brush.size + 1); renderPane(); render(); }
-      else if (e.key === 'x' || e.key === 'X') { G.brush.erase = !G.brush.erase; renderPane(); render(); }
+    if (S.tool === 'paint' || S.tool === 'shape') { // the shared brush; X erases textures
+      const sized = () => { renderPane(); updateHint(); render(); if (typeof FR !== 'undefined') FR.renderStatus(); };
+      if (e.key === '[') { G.brush.size = Math.max(1, G.brush.size - 1); sized(); }
+      else if (e.key === ']') { G.brush.size = Math.min(60, G.brush.size + 1); sized(); }
+      else if ((e.key === 'x' || e.key === 'X') && S.tool === 'paint') { G.brush.erase = !G.brush.erase; renderPane(); render(); }
     } else if (S.tool === 'stamp' && (e.key === 'Delete' || e.key === 'Backspace') && stamps()[G.stamp]) {
       const i = G.stamp;
       edit(d => { d.ground.stamps.splice(i, 1); if (!d.ground.stamps.length) delete d.ground.stamps; });
@@ -1029,7 +1286,8 @@
     addLayer({ rgb: [230, 40, 200] });
     ok &= say(layers().length === n0 + 1 && S.tool === 'paint' && G.layer === n0, 'layer ' + G.layer + ' added, the Paint tool on');
     // a stroke through the tool's mouse code: down, moves, up
-    G.brush = { size: 8, soft: 2, erase: false, raster: false };
+    Object.assign(G.brush, { size: 8, soft: 2, erase: false, raster: false, shape: 'circle' }); // the shared brush (S.brush) kept
+    S.draw = 'brush';
     const tool = ED.tools.paint, pts = [[-140, -100], [-130, -98], [-120, -96], [-110, -94], [-100, -92]];
     tool.down(pts[0]); pts.slice(1).forEach(p => tool.move(p)); tool.up();
     const sh = cur().shapes;
@@ -1138,7 +1396,8 @@
     // a layer over the picture, painted with the brush
     addLayer({ rgb: [230, 40, 200] });
     ok &= say(layers().length === 1 && G.layer === 0 && S.tool === 'paint' && !canPaint(), 'layer 0 added over the picture, paintable');
-    G.brush = { size: 8, soft: 2, erase: false, raster: false };
+    Object.assign(G.brush, { size: 8, soft: 2, erase: false, raster: false, shape: 'circle' }); // the shared brush (S.brush) kept
+    S.draw = 'brush';
     const tool = ED.tools.paint;
     tool.down([-140, -100]); [[-130, -98], [-120, -96], [-110, -94], [-100, -92]].forEach(p => tool.move(p)); tool.up();
     await settle();
@@ -1159,7 +1418,137 @@
     document.title = ok ? 'selftest passed' : 'selftest failed';
     document.body.dataset.selftest = ok ? 'passed' : 'failed';
   }
+  // ?open=CM_Marsh&selftest=derived: the layers that follow the gameplay shapes (EDUX7's rules lanes and edge): the
+  // rule list, the tiles' marks, the fields (width; from, to, along), the presets, then View > Hide Derived Art (the
+  // bake and the 3-D ground asked with ?derived=0, the scatters' props gone from both views, off again as before)
+  async function selftestDerived() {
+    const out = $('selftest'), lines = [];
+    out.classList.remove('hidden');
+    const say = (ok, msg) => { ok = !!ok; lines.push((ok ? 'PASS ' : 'FAIL ') + msg); out.textContent = lines.join('\n'); return ok; };
+    const until = async (fn, ms) => { const t0 = Date.now(); while (!fn()) { if (Date.now() - t0 > ms) return false; await new Promise(r => setTimeout(r, 50)); } return true; };
+    const settle = async () => { clearTimeout(S.checkTimer); await runCheck(); };
+    const baked2 = async n => until(() => !G.bakeBusy && G.bakeN > n && G.bake && G.bake.img.complete, 180000);
+    const bakedNow = () => until(() => !G.bakeBusy && G.bakeKey === bakeKey() && G.bake && G.bake.n === G.bakeN && G.bake.img.complete, 180000); // the bake of the document as it is
+    const grab = () => { // the bake at 256 x 256
+      const c = document.createElement('canvas'); c.width = c.height = 256;
+      c.getContext('2d').drawImage(G.bake.img, 0, 0, 256, 256);
+      return c.getContext('2d').getImageData(0, 0, 256, 256).data;
+    };
+    const differ = (a, b) => { let n = 0; for (let i = 0; i < a.length; i += 4) if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) > 24) n++; return n / (a.length / 4); };
+    const change = (el, v) => { el.value = v; el.dispatchEvent(new Event('change')); };
+    const seen = [], fetch0 = window.fetch; // every request's URL (the bake's and the ground's query)
+    window.fetch = (u, o) => { seen.push(String(u)); return fetch0(u, o); };
+    const scat = () => PR.shown().filter(it => it.kind === 'scatter').length;
+    const scatter3d = () => { // the props layer's 3-D instances of the scatters (their models loaded)
+      const list = [];
+      for (const fn of V3D.V.layers) fn({ gl: V3D.V.gl, list, modelFor: V3D.modelFor, M: V3D.M });
+      return list.filter(i => /^prop\|scatter\[/.test(i.key || '')).length;
+    };
+    let ok = true;
+    try {
+      ok &= say(S.report && S.report.ok && baked(), 'opened ' + S.pkg + ': ' + (S.report && S.report.ok ? 'passes' : 'fails') + ', ground ' + (gr() && gr().style));
+      ok &= say(await baked2(0), 'the first bake shown: ' + G.bakeN + ' (' + G.bakeMs + ' ms)');
+      ok &= say(!/derived=0/.test(G.bakeURL || '') && !S.hideDerived, 'the plain bake request: ' + G.bakeURL);
+      const ls = layers(), kLane = ls.findIndex(l => l.auto === 'lanes'), kFoot = ls.findIndex(l => l.auto === 'edge' && l.along === 'walls'),
+        kRim = ls.findIndex(l => l.auto === 'edge' && l.along === 'chasms');
+      ok &= say(kLane > 0 && kFoot > 0 && kRim > 0, `the derived layers: lane ${kLane}, cliff foot ${kFoot}, rim ${kRim}`);
+      // the tiles: marked, with the rule under the name
+      const tile = k => pane.querySelector(`.tile[data-k="${k}"]`), rl = k => (tile(k).querySelector('.rl') || {}).textContent || '';
+      ok &= say(tile(kLane).classList.contains('drv') && rl(kLane) === 'follows lanes', `the lane tile marked: "${rl(kLane)}" (${tile(kLane).title})`);
+      ok &= say(tile(kFoot).classList.contains('drv') && rl(kFoot) === 'wall −1–3 m', `the cliff foot's: "${rl(kFoot)}"`);
+      ok &= say(rl(kRim) === 'chasm −1–2.5 m' && !tile(1).classList.contains('drv') && !tile(1).querySelector('.rl'), `the rim's: "${rl(kRim)}"; the grass (high) unmarked`);
+      // the rule list and the lanes' width (Ground Layers in Detail)
+      G.layer = 1; renderPane();
+      ok &= say(!/null/.test(pane.textContent + layersWin.textContent), 'no "null" written in Apply Texture or the layers\' window (a layer without a rule chosen)');
+      G.layer = kLane; renderPane();
+      const sel = () => layersWin.querySelector('.gprops select');
+      const opts = [...sel().options].map(o => o.value);
+      ok &= say(opts.includes('lanes') && opts.includes('edge') && sel().value === 'lanes', 'the rule list: ' + opts.join(' ') + ', chosen ' + sel().value);
+      ok &= say(pane.querySelector('.note.gdrv') && /follows the lanes \(10 m wide\)/.test(pane.querySelector('.note.gdrv').textContent), 'Apply Texture says why: ' + (pane.querySelector('.note.gdrv') || {}).textContent);
+      const wIn = [...layersWin.querySelectorAll('.gprops label')].find(l => l.textContent.startsWith('width'));
+      ok &= say(wIn && wIn.querySelector('input').value === '10', 'the lane layer\'s width field: ' + (wIn && wIn.querySelector('input').value));
+      change(wIn.querySelector('input'), '14');
+      ok &= say(layers()[kLane].width === 14, 'width 14 written: ' + JSON.stringify(layers()[kLane].width));
+      change(sel(), 'edge');
+      ok &= say(layers()[kLane].auto === 'edge' && layers()[kLane].width === undefined, 'the rule changed to edge: width dropped ' + JSON.stringify(layers()[kLane]).slice(0, 160));
+      undo(); undo();
+      ok &= say(layers()[kLane].auto === 'lanes' && layers()[kLane].width === 10, 'two undos: lanes, width 10 again');
+      // the edge's fields: from, to, along
+      G.layer = kRim; renderPane();
+      const rIn = i => layersWin.querySelector(`input[data-range="${i}"]`), along = () => layersWin.querySelector('select[data-along]');
+      ok &= say(rIn(0) && rIn(0).value === '-1' && rIn(1).value === '2.5' && along().value === 'chasms', `the rim's fields: from ${rIn(0) && rIn(0).value}, to ${rIn(1) && rIn(1).value}, along ${along() && along().value}`);
+      change(rIn(0), '-2');
+      ok &= say(JSON.stringify(layers()[kRim].range) === '[-2,2.5]', 'from -2: range ' + JSON.stringify(layers()[kRim].range));
+      change(rIn(1), '');
+      ok &= say(JSON.stringify(layers()[kRim].range) === '[-2,6]', 'to emptied (its default 6): range ' + JSON.stringify(layers()[kRim].range));
+      change(along(), '');
+      ok &= say(layers()[kRim].along === undefined && rl(kRim) === 'edge −2–6 m', `along both: the member gone, the tile "${rl(kRim)}"`);
+      undo(); undo(); undo();
+      ok &= say(JSON.stringify(layers()[kRim].range) === '[-1,2.5]' && layers()[kRim].along === 'chasms', 'three undos: the rim as before');
+      // the presets: one click each
+      const n0 = layers().length, tool0 = S.tool;
+      pane.querySelector('[data-preset="lanepath"]').click();
+      const top = layers()[layers().length - 1];
+      ok &= say(layers().length === n0 + 1 && top.auto === 'lanes' && top.width === 10 && G.layer === n0 && S.tool === tool0, '+ Lane path: on top, ' + JSON.stringify(top));
+      pane.querySelector('[data-preset="clifffoot"]').click();
+      const at = G.layer, cf = layers()[at], below = layers()[at - 1];
+      ok &= say(layers().length === n0 + 2 && cf.auto === 'edge' && cf.along === 'walls' && JSON.stringify(cf.range) === '[-1,3]' && below.auto === 'edge' && below.along === 'chasms',
+        `+ Cliff foot: at ${at}, just above the ${below.name} (the older rules and edges under it, the painted layers over it)`);
+      ok &= say(tile(at).classList.contains('drv') && rl(at) === 'wall −1–3 m', 'its tile marked: ' + rl(at));
+      await settle();
+      ok &= say(S.report.ok, 'the check with both: ' + (S.report.ok ? 'passes' : (S.report.findings || []).map(f => f.rule + ' ' + f.message).join('; ')));
+      undo(); undo();
+      ok &= say(layers().length === n0, 'two undos: the presets gone');
+      await settle();
+      ok &= say(await bakedNow(), 'the bake of the map as opened: ' + G.bakeN);
+      const plain = grab(), at2 = [-176, -68], px = () => { const d = grab(), x = Math.round((at2[0] / (2 * G.bake.half) + 0.5) * 256), y = Math.round((0.5 - at2[1] / (2 * G.bake.half)) * 256); return Array.from(d.slice(4 * (y * 256 + x), 4 * (y * 256 + x) + 3)); };
+      const lane0 = px();
+      // View > Hide Derived Art: the bake without the rules, the scatters' props hidden
+      const sc0 = scat(), live0 = PR.live().filter(it => it.kind === 'scatter');
+      ok &= say(sc0 > 10, `the scatters' props drawn: ${sc0}`);
+      // a team 1 marker far from every scatter's drawn region (whose outline a click selects too)
+      const corners = (S.doc.scatter || []).flatMap(sc => Array.isArray(sc.polygon) ? sc.polygon : []);
+      const away = it => Math.min(Infinity, ...corners.map(q => Math.hypot(it.pos[0] - q[0], it.pos[1] - q[1])));
+      const m0 = live0.filter(it => it.team === 1).sort((a, b) => away(b) - away(a))[0], sm = w2s(m0.pos);
+      const hitScatter = () => ED.hitItems.some(fn => { const r = fn(sm[0], sm[1], m0.pos); return r && r.sel && r.sel.t === 'scatter'; });
+      ok &= say(hitScatter(), `a click on one at (${m0.pos.slice(0, 2).map(r1g)}) selects its scatter (${m0.path})`);
+      let n = G.bakeN;
+      seen.length = 0;
+      ED.actions['ground.hideDerived']();
+      ok &= say(S.hideDerived && ED.flags['ground.hideDerived']() && /\/api\/bake\/CM_Marsh\?derived=0$/.test(G.bakeURL) && seen.some(u => /\/api\/bake\/[^?]+\?derived=0$/.test(u)), 'Hide Derived Art on: the bake asked as ' + G.bakeURL);
+      ok &= say(await bakedNow() && G.bakeN > n, 'bake ' + G.bakeN + ' without the derived art (' + G.bakeMs + ' ms)');
+      const bare = grab(), d1 = differ(plain, bare), lane1 = px();
+      ok &= say(d1 > 0.01 && Math.abs(lane1[0] - lane0[0]) + Math.abs(lane1[1] - lane0[1]) + Math.abs(lane1[2] - lane0[2]) > 30,
+        `the bake changed: ${(d1 * 100).toFixed(1)} % of it, the lane at (${at2}) rgb ${lane0} -> ${lane1}`);
+      ok &= say(scat() === 0 && PR.live().filter(it => it.kind === 'scatter').length === sc0, 'the scatters\' props hidden in 2-D; the check\'s markers kept');
+      ok &= say(!hitScatter(), 'a click there hits no scatter prop');
+      ok &= say(/derived art hidden/.test(statusEl.textContent), 'the ground status says so: ' + statusEl.textContent);
+      // the 3-D view: its ground asked with ?derived=0, no scatter prop drawn
+      seen.length = 0;
+      ED.setView('3d');
+      ok &= say(await until(() => V3D.settled() && V3D.V.groundKey === V3D.groundKey() && /derived=0$/.test(V3D.V.groundReq || ''), 240000),
+        '3-D: the ground asked as ' + V3D.V.groundReq + ' (' + seen.filter(u => /\/api\/ground\//.test(u)).join(' ') + ')');
+      await until(() => V3D.settled(), 60000);
+      ok &= say(scatter3d() === 0, '3-D: no scatter prop drawn');
+      // off again: the plain requests, the scatters back
+      n = G.bakeN;
+      const g0 = V3D.V.groundN;
+      ED.actions['ground.hideDerived']();
+      ok &= say(!S.hideDerived && !ED.flags['ground.hideDerived']() && !/derived/.test(G.bakeURL), 'Hide Derived Art off: the bake asked as ' + G.bakeURL);
+      ok &= say(await until(() => V3D.V.groundN > g0 && V3D.settled() && V3D.V.groundKey === V3D.groundKey(), 240000) && !/derived/.test(V3D.V.groundReq),
+        '3-D: the ground asked again as ' + V3D.V.groundReq);
+      ok &= say(await until(() => scatter3d() > 0, 60000), '3-D: the scatters\' props drawn again: ' + scatter3d());
+      ok &= say(await bakedNow() && G.bakeN > n, 'bake ' + G.bakeN + ' with the derived art');
+      const d2 = differ(plain, grab());
+      ok &= say(d2 < 0.001 && scat() === sc0 && hitScatter(), `the bake as before (${(d2 * 100).toFixed(2)} % differs), the scatters' ${scat()} props drawn and hit again`);
+      ED.setView('2d');
+    } finally { window.fetch = fetch0; }
+    say(ok, ok ? 'selftest passed' : 'selftest failed');
+    document.title = ok ? 'selftest passed' : 'selftest failed';
+    document.body.dataset.selftest = ok ? 'passed' : 'failed';
+  }
   ED.selftests = ED.selftests || {};
+  ED.selftests.derived = selftestDerived;
   ED.selftests.groundio = selftestIO;
   ED.selftests['groundio-save'] = selftestIO;
   ED.selftests.ground = selftest;

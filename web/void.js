@@ -25,9 +25,10 @@ const VOID = (() => {
   const rgbHex = c => '#' + [0, 1, 2].map(i => hex2(+c[i] || 0)).join('');
   const hexRgb = s => [1, 3, 5].map(i => parseInt(s.slice(i, i + 2), 16));
 
-  const pane = ED.addPane('right', 'Void');
-  const sec = pane.parentNode;
-  sec.id = 'paneVoid';
+  const pane = ED.addPane('window:void', 'The Void'); // Map > The Void
+  const sec = pane;
+  pane.id = 'paneVoid';
+  ED.actions['map.void'] = () => ED.openWindow('void');
   let slots = {}; // a field's path (void.mist.z) -> the element its findings go into
 
   // field: a row with a label, its control, the hint (ranges, findings) and a place for the check's findings
@@ -159,6 +160,7 @@ const VOID = (() => {
   ED.on('checked', refresh);
   ED.on('open', () => { paneKey = ''; refresh(); });
   ED.on('focus-void', path => {
+    ED.openWindow('void');
     refresh();
     let best = null;
     for (const el of pane.querySelectorAll('[data-path]')) {
