@@ -24,11 +24,11 @@ const FR = (() => {
   ED.flags = ED.flags || {};
   const TOOL_TAB = { shape: 'terrain', paint: 'terrain', stamp: 'terrain', prop: 'doodads', scatter: 'doodads', paste: 'doodads',
     well: 'units', camp: 'units', ward: 'units' };
-  const TOOL_NAME = { select: 'Select', shape: 'Apply Cliff', well: '+ Well', camp: '+ Camp', ward: '+ Ward spot',
+  const TOOL_NAME = { select: 'Select', shape: 'Apply Cliff', well: '+ Well', camp: 'Add a Camp', ward: '+ Ward spot',
     prop: 'Place a doodad', scatter: 'Scatter', paste: 'Paste a group', paint: 'Apply Texture', stamp: 'Stamp' };
   const KIND = { locus: ['L', '#58a6ff'], guardian: ['G', '#58a6ff'], shop: ['S', '#58a6ff'], spawn: ['P', '#9cc8ff'],
     core: ['C', '#7fb2ff'], binding: ['B', '#7fb2ff'], spawner: ['M', '#f2b84b'], well: ['W', '#5fd38d'],
-    camp: ['J', '#ff8f6b'], ward: ['w', '#c8a2ff'] };
+    camp: ['C', '#ff8f6b'], ward: ['w', '#c8a2ff'] };
   // the Apply Cliff kinds, with the World Editor's word beside ours
   const CLIFFS = [
     { id: 'chasm', name: 'Chasm', we: 'Lower', tip: 'Lowers the ground 5 m: seen across, never walked (the World Editor\'s Decrease One)' },
@@ -59,6 +59,7 @@ const FR = (() => {
     renderPalettes();
     ED.emit('tab', t);
   }
+  ED.setTab = setTab;
   function toggleView() { ED.setView(ED.view === '2d' ? '3d' : '2d'); }
   function spaceToggle() { // Space: Select <-> the palette's tool
     if (S.tool !== 'select') { setTool('select'); return; }
@@ -78,6 +79,7 @@ const FR = (() => {
     if (!p) return;
     if (ED.view === '2d') { S.view.x = p[0]; S.view.y = p[1]; S.fitted = false; render(); } else if (typeof V3D !== 'undefined') V3D.setTarget(p[0], p[1]);
   }
+  ED.centre = centre;
   function selPoint() {
     const v = selValue(S.sel);
     if (Array.isArray(v) && typeof v[0] === 'number') return v;
@@ -187,6 +189,8 @@ const FR = (() => {
       { t: 'Options...', note: 'the ground everywhere else', off: () => !S.doc, act: act('map.options') },
       { t: 'The Void...', note: 'what lies past the ground', off: () => !has('map.void'), act: act('map.void') },
       { t: 'Ground Bake and Cliff...', note: 'texels, tiles, minimap, cliff material', off: () => !has('ground.bake'), act: act('ground.bake') },
+      '-',
+      { t: 'Add a Camp', note: 'opens the Units tab', off: () => !S.doc || !has('map.addCamp'), act: act('map.addCamp') },
       '-',
       { t: 'Check...', act: () => ED.openWindow('check') },
       { t: 'The Bots\' Points...', note: 'rally, Hunter routes, uneven', act: () => { if (!S.show.bots) toggleShow('bots'); ED.openWindow('check'); } },
@@ -407,7 +411,7 @@ const FR = (() => {
       const [ch, col] = KIND[o.kind] || ['?', '#888'];
       const sel = objSel(o);
       return h('div', { class: 'li' + (sameSel(sel, S.sel) ? ' on' : ''), 'data-kind': o.kind, title: 'Select it and jump there', onclick: () => { select(sel); centre(o.pos); } },
-        h('span', { class: 'dot', style: 'background:' + col }, ch), h('span', { class: 'nm' }, o.name.replace(/SpawnPoint_(v5_|Objective_)?/, '').replace(/\.Noun$/, '')),
+        h('span', { class: 'dot', style: 'background:' + (o.color || col) }, o.once ? 'P' : ch), h('span', { class: 'nm' }, o.label || o.name),
         h('span', { class: 'r' }, `${r1(o.pos[0])}, ${r1(o.pos[1])}`));
     };
     const add = (t, tool, tip, extra) => h('a', { class: 'lnk', title: tip, 'data-add': t, onclick: () => { if (extra) extra(); setTool(tool); } }, t);
@@ -420,12 +424,12 @@ const FR = (() => {
     if (F.player !== 'team1') {
       list.append(...cat('Neutral passive', [add('+ Well', 'well', 'A spirit well (18 workers): click the map', () => { S.wellKind = 'well'; }),
         add('+ Mine', 'well', 'A mine (36 workers): click the map', () => { S.wellKind = 'mine'; })], o => o.kind === 'well'));
-      list.append(...cat('Neutral hostile', [add('+ Camp', 'camp', 'A jungle camp: click the map; its creatures in its JSON')], o => o.kind === 'camp'));
+      list.append(...cat('Neutral hostile', [], o => o.kind === 'camp')); // added from Add a Camp above (camps.js)
     }
     if (F.player !== 'neutral') list.append(...cat('The bots\' ward spots', [add('+ Ward spot', 'ward', 'A spot the bots ward: click the map')], o => o.kind === 'ward'));
     unitsBody.parentNode.classList.toggle('armed', TOOL_TAB[S.tool] === 'units');
     unitsBody.append(h('div', { class: 'row' }, h('span', { class: 'small' }, 'Player'), player), list,
-      h('div', { class: 'note' }, 'Click one to select it and jump there; drag it on the map. The base is moved, never added or deleted; team 2\'s is the mirror.'));
+      h('div', { class: 'note' }, 'Click one to select it and jump there; drag it on the map. Del deletes a camp. The base is moved, never added or deleted; team 2\'s is the mirror.'));
   }
 
   const lanesBody = ED.addPane('lanes', 'Lanes', 10);
@@ -499,10 +503,10 @@ const FR = (() => {
     } else if (s.t === 'obj' || s.t === 'auto') {
       const o = objects().find(x => sameSel(objSel(x), s));
       const [ch, col] = (o && KIND[o.kind]) || ['?', '#888'];
-      pv.textContent = ch;
-      pv.style.color = col;
-      title = o ? o.name : 'unit';
-      sub = o && o.auto ? 'placed by the editor ("auto")' : 'team 2 gets its mirror';
+      pv.textContent = o && o.once ? 'P' : ch;
+      pv.style.color = (o && o.color) || col;
+      title = o ? o.label || o.name : 'unit';
+      sub = o && o.auto ? 'placed by the editor ("auto")' : o && o.once ? 'stands once, no mirror' : 'team 2 gets its mirror';
     } else if (['shape', 'vertex', 'radius'].includes(s.t)) {
       const sh = shapes()[s.i];
       const k = sh ? (sh.type === 'chasm' && sh.water ? 'water' : sh.type) : '';
@@ -646,7 +650,7 @@ const FR = (() => {
     const s = S.sel;
     if (!s || !S.doc) return '';
     const v = selValue(s), p = selPoint(), at = p ? ` at (${r1(p[0])}, ${r1(p[1])})` : '';
-    if (s.t === 'obj' || s.t === 'auto') { const o = objects().find(x => sameSel(objSel(x), s)); return (o ? o.name : 'unit') + ', team 1' + at; }
+    if (s.t === 'obj' || s.t === 'auto') { const o = objects().find(x => sameSel(objSel(x), s)); return (o ? o.label || o.name : 'unit') + (o && o.once ? '' : ', team 1') + at; }
     if (s.t === 'prop') return (v && v.group ? 'group of ' + v.group.level : 'doodad ' + (v && v.noun || '')) + at;
     if (['shape', 'vertex', 'radius'].includes(s.t)) { const sh = shapes()[s.i]; return (sh ? sh.type : '') + ' shape ' + s.i + (s.t === 'vertex' ? ', corner ' + s.v : '') + at; }
     if (s.t === 'knot') return 'lane ' + (lanes()[s.l] || {}).id + ', knot ' + (s.k + 1) + at;
@@ -661,6 +665,7 @@ const FR = (() => {
     let st2 = TOOL_NAME[t] || t;
     if (t === 'shape') st2 = drawLabel() + ' \u00B7 ' + ((CLIFFS.find(c => c.id === S.cliff) || {}).name || S.cliff);
     if (t === 'well') st2 = S.wellKind === 'mine' ? '+ Mine' : '+ Well';
+    if (t === 'camp' && ED.camps) st2 = 'Add a Camp · ' + ED.camps.current().name;
     if (tool && tool.status) { try { st2 = tool.status(); } catch (e) { /* the tool's own line */ } }
     $('st2').textContent = st2;
     $('st2').title = $('toolHint').textContent || 'The tool and its brush';

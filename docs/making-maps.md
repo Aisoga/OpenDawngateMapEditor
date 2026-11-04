@@ -65,7 +65,7 @@ passes unnoticed.
 | `lanes` | one or two lanes: `{"id": 1 (Top) or 2 (Bottom), "width": m, "knots": [[x, y], ...]}`, in team 1's direction from its base | ids once each; width 6-80 m; 2-16 knots, none within 1 m of the one before; lane 2 is lane 1 mirrored and walked back, with the same width |
 | `base` | team 1's base: `locus`, `guardian`, `shop` (the shop's reach is measured from it), `spawns` (5 points), `cores` and `bindings` | below |
 | `wells` | team 1's spirit wells or gold mines: `[{"kind": "well" or "mine", "pos": [x, y]}]`, each mirrored | 1-8 on the map (so 1-4 authored) |
-| `camps` | team 1's jungle camps: `[{"kind": "camp", "buff" or "parasite", "noun": "<the camp's spawner>", "pos": [x, y]}]`, each mirrored but the parasite (the map has one) | the noun one of the original map's camp spawners |
+| `camps` | team 1's jungle camps: `[{"kind": "camp", "buff" or "parasite", "noun": "<the camp's spawner>", "pos": [x, y]}]`, each mirrored but the parasite (the map has one). The editor's Units > Add a Camp writes these for you: *Camps by name* below | the noun one of the original map's camp spawners |
 | `terrain` | the layout: `default` (what the ground is where no shape is: `wall`, `open` or `chasm`) and `shapes`, drawn in order over it, each mirrored | below |
 | `ground` | how the ground looks: `{"style": "tiled"}` (the plain default) or `"baked"` (painted: layers, stamps, a cliff material, your own pictures) | below |
 | `props` | the game's models as dressing: a single model (`noun`) or a piece of an original map's dressing (`group`) | below |
@@ -154,6 +154,22 @@ see-through layer that tints what lies under it), `fog` (`start`, `end`, `color`
 **The graph** (`graph`): the walking graphs are made of squares; a smaller square (`"cell": 2`) brings the walkable
 ground nearer the walls. Without it the compiler picks the smallest square that keeps both graphs under 7,000 areas.
 
+### Camps by name
+
+In the editor, Units > Add a Camp and a selected camp's *Type* use these names and write `kind` and `noun` for you. The
+table is for writing `map.json` by hand. The creatures, timers and rewards come with the spawner.
+
+| In the editor | `kind` | `noun` | Creatures |
+|---|---|---|---|
+| Green buff (Power) | `buff` | `SpawnPoint_v5_Buff_Fish.Noun` | 2 small fish, a big one |
+| Blue buff (Haste) | `buff` | `SpawnPoint_v5_Buff_Fungus.Noun` | 2 small mushrooms, a big one |
+| Orange buff (armor) | `buff` | `SpawnPoint_v5_Buff_Ugger.Noun` | a small Ugger, a big one |
+| Fish camp | `camp` | `SpawnPoint_v5_CreepsFish.Noun` | 3 fish |
+| Mushroom camp | `camp` | `SpawnPoint_v5_CreepsFungus.Noun` | 4 mushrooms |
+| Ugger camp | `camp` | `SpawnPoint_v5_CreepsUgger.Noun` | 2 Uggers |
+| Gold Pigs | `buff` | `SpawnPoint_v5_CreepsBoar.Noun` | 2 boars; the kind is `buff` so the bots treat them as a big camp, but they give no buff |
+| Parasite | `parasite` | `SpawnPoint_Objective_Titan.Noun` | the objective; one on a map, no mirror |
+
 ## The check's rules
 
 The editor runs the check after every edit, and a map that fails a rule (an **error**) doesn't build. A **warning**
@@ -195,10 +211,10 @@ These run first; the layout rules run only when they pass.
 | `fixed.bindings` | the Bindings aren't 3 (or 2) per lane, the same count on every lane, for the map's lanes only | fix the lists, or *Back to "auto"* |
 | `budget.wells` | fewer than 1 or more than 8 wells on the map (so more than 4 authored) | add or remove wells |
 | `wells.kind` | a well's `kind` isn't `well` or `mine` | fix the kind (or leave it out: a well) |
-| `camps.kind` | a camp's kind isn't `camp`, `buff` or `parasite` | fix the kind |
-| `camps.noun` | a camp's noun isn't one of the original map's camp spawners | pick a spawner from the camp tool's list |
+| `camps.kind` | a camp's kind isn't `camp`, `buff` or `parasite` | select the camp and choose its *Type* |
+| `camps.noun` | a camp has no noun, or one that isn't one of the original map's camp spawners | select the camp and choose its *Type* |
 | `camps.parasite` | a second parasite camp (an error), or the parasite more than 30 m from the centre (a warning: it isn't mirrored, so it favours one team) | keep one parasite, near the centre |
-| `camps.role` (warning) | a `buff` camp's noun has no Buff or Boar in its name, or a `camp`'s has | match the kind to the spawner, or the bots treat the camp wrongly |
+| `camps.role` (warning) | a `buff` camp's noun has no Buff or Boar in its name, or a `camp`'s has | choose the camp's *Type* again (it sets both), or the bots treat the camp wrongly |
 | `terrain.default` | `terrain.default` isn't `wall`, `open` or `chasm` | fix the value |
 | `terrain.shape` | a shape's type is unknown, it hasn't exactly one geometry, a circle has no `r`, a polygon fewer than 3 corners, a path fewer than 2 points or no width, it names a lane the map hasn't, a bush is a lane or a path, an island is a lane | fix the shape in the selection's info (its JSON under Advanced) |
 

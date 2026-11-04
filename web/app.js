@@ -118,7 +118,7 @@ const S = {
   sel: null, hover: null, hoverFinding: null, tool: 'select', drawing: null, drag: null,
   // the Terrain tab's Apply Cliff: the kind a new shape gets (wall, open, chasm, water = a chasm with water, island,
   // bush) the Terrain tab draws, and the draw mode it and the textures share (brush, polygon, circle, path); the Units tab's + Well or + Mine
-  cliff: 'wall', draw: 'brush', wellKind: 'well', stroke: null, lastMaterial: 'shape',
+  cliff: 'wall', draw: 'brush', wellKind: 'well', campType: 'green', stroke: null, lastMaterial: 'shape',
   // the brush both materials draw with (ground.js's G.brush is this object): size and soft edge (m), erase and into
   // the picture (textures), its shape (circle or square)
   brush: { size: 8, soft: 3, erase: false, raster: false, shape: 'circle' },
@@ -165,8 +165,9 @@ function log(msg, cls) {
   if (cls) d.className = cls;
   d.textContent = new Date().toLocaleTimeString() + '  ' + msg;
   $('log').prepend(d);
-  if (cls === 'err') {
+  if (cls === 'err' || cls === 'tip') { // the status bar shows these for a while; a tip is guidance, not an error
     const f = $('st4flash');
+    f.classList.toggle('tip', cls === 'tip');
     f.textContent = msg;
     f.title = msg + ' (View > Messages)';
     clearTimeout(log.timer);
@@ -393,7 +394,9 @@ function objects() {
       { auto: 'bindings', lane: o.lane, tier: TIERS.indexOf(o.name.split(' ').pop()) }));
   }
   (Array.isArray(d.wells) ? d.wells : []).forEach((w, i) => w && add('well', w.kind === 'mine' ? 'mine' : 'well', w.pos, ['wells', i, 'pos']));
-  (Array.isArray(d.camps) ? d.camps : []).forEach((c, i) => c && add('camp', (c.kind || 'camp') + ' ' + (c.noun || ''), c.pos, ['camps', i, 'pos']));
+  // a camp: its name stays kind + noun (the overlays and the 3-D view's keys read it), label and color are what people see
+  (Array.isArray(d.camps) ? d.camps : []).forEach((c, i) => c && add('camp', (c.kind || 'camp') + ' ' + (c.noun || ''), c.pos, ['camps', i, 'pos'],
+    ED.camps ? { label: ED.camps.labelOf(c), color: ED.camps.colorOf(c), once: c.kind === 'parasite' } : null));
   // the bots' ward spots (map.json "wards"): shown and moved like the wells; new ones are added in map.json
   (Array.isArray(d.wards) ? d.wards : []).forEach((w, i) => w && add('ward', 'ward ' + (i + 1), w.pos, ['wards', i, 'pos']));
   return out;
@@ -673,7 +676,7 @@ function drawSymbol(o, team, sel) {
     ctx.lineWidth = 2 * dpr;
     ctx.stroke();
   } else {
-    ctx.fillStyle = TEAM[team - 1];
+    ctx.fillStyle = o.color || TEAM[team - 1];
     ctx.fill();
   }
   if (sel) {
@@ -682,7 +685,7 @@ function drawSymbol(o, team, sel) {
     ctx.stroke();
   }
   const label = { locus: 'L', guardian: 'G', shop: '$', spawn: o.name.slice(-1), core: o.name.slice(-1),
-    binding: o.tier >= 0 ? 'OMI'[o.tier] : 'B', well: 'W', camp: 'C', spawner: 'm', prop: '', ward: 'w' }[o.kind] || '?';
+    binding: o.tier >= 0 ? 'OMI'[o.tier] : 'B', well: 'W', camp: o.once ? 'P' : 'C', spawner: 'm', prop: '', ward: 'w' }[o.kind] || '?';
   ctx.globalAlpha = 1;
   ctx.fillStyle = o.auto || o.kind === 'spawner' ? TEAM[team - 1] : '#0b0d10';
   ctx.font = `bold ${9 * dpr}px Segoe UI, sans-serif`;
@@ -779,7 +782,7 @@ function render() {
   ED.emit('draw', 'under'); // the props (props.js)
   if (S.show.objects) {
     const obs = objects();
-    if (S.show.mirror) obs.forEach(o => drawSymbol(o, 2, false));
+    if (S.show.mirror) obs.filter(o => !o.once).forEach(o => drawSymbol(o, 2, false));
     if (S.preview) {
       S.preview.objects.filter(o => o.kind === 'spawner').forEach(o =>
         drawSymbol({ kind: 'spawner', name: o.name, pos: o.team === 2 ? mir(o.pos) : o.pos }, o.team, false));
@@ -858,7 +861,7 @@ ED.marks.push(function selectionMarks(v) {
     if (o && S.show.objects) {
       const r = Math.max(MARK_R[o.kind] || 3, 8 * vmpp(v, o.pos));
       vring(v, o.pos, r); g.stroke();
-      if (S.show.mirror) { g.globalAlpha = 0.55; g.setLineDash([5 * dpr, 4 * dpr]); vring(v, mir(o.pos), r); g.stroke(); }
+      if (S.show.mirror && !o.once) { g.globalAlpha = 0.55; g.setLineDash([5 * dpr, 4 * dpr]); vring(v, mir(o.pos), r); g.stroke(); }
     }
   } else if (sel.t === 'knot') {
     const p = getAt(S.doc, ['lanes', sel.l, 'knots', sel.k]);
@@ -1091,7 +1094,7 @@ function hit(a, b) {
   if (S.show.objects) {
     const obs = objects();
     for (const o of obs) if (near(o.pos, 9)) return { sel: objSel(o) };
-    if (S.show.mirror) for (const o of obs) if (near(mir(o.pos), 9)) return { sel: objSel(o), mirrored: true };
+    if (S.show.mirror) for (const o of obs) if (!o.once && near(mir(o.pos), 9)) return { sel: objSel(o), mirrored: true };
   }
   for (const fn of ED.hitItems) { const r = fn(sx, sy, w, near, pk); if (r) return r; }
   if (S.show.lanes) {
@@ -1312,10 +1315,11 @@ function inputDown(v, e) {
     return true;
   }
   if (ED.tools[S.tool] && ED.tools[S.tool].down) { ED.tools[S.tool].down(w, e); return true; }
-  if (S.tool === 'well' || S.tool === 'camp' || S.tool === 'ward') { // the Units tab's + Well, + Mine, + Camp, + Ward spot
-    const p = smartW(w, e), list = { well: 'wells', camp: 'camps', ward: 'wards' }[S.tool];
+  if (S.tool === 'camp') { ED.camps.place(smartW(w, e)); return true; } // Units > Add a Camp: the type armed (camps.js)
+  if (S.tool === 'well' || S.tool === 'ward') { // the Units tab's + Well, + Mine, + Ward spot
+    const p = smartW(w, e), list = { well: 'wells', ward: 'wards' }[S.tool];
     if (ED.refusePlace && ED.refusePlace(S.tool, p)) return true; // feedback.js: on a wall, past the edge, team 2's half
-    const item = S.tool === 'camp' ? { kind: 'camp', noun: '', pos: p } : S.tool === 'well' && S.wellKind === 'mine' ? { kind: 'mine', pos: p } : { pos: p };
+    const item = S.tool === 'well' && S.wellKind === 'mine' ? { kind: 'mine', pos: p } : { pos: p };
     edit(d => {
       d[list] = Array.isArray(d[list]) ? d[list] : [];
       d[list].push(item);
@@ -1795,7 +1799,7 @@ ED.previews.push(drawBrushCursor);
 // the hints of app.js's own tools (shown over the view while the tool is armed)
 const TOOL_HINTS = {
   well: 'Click where the new well goes (team 1\'s half; team 2 gets the mirror). Esc ends.',
-  camp: 'Click where the new camp goes; choose its creatures in its JSON (the selection\'s Advanced). Esc ends.',
+  camp: 'Click the map to place the camp. Esc cancels.', // camps.js names the type once the tool is armed
   ward: 'Click where the bots\' new ward spot goes (open ground both bases reach). Esc ends.',
 };
 function setTool(t) {
@@ -1844,7 +1848,9 @@ function deleteSel() {
   }
   if (s.t === 'obj' && ['wells', 'camps', 'wards'].includes(s.path[0])) {
     edit(d => d[s.path[0]].splice(s.path[1], 1));
-    return select(null);
+    select(null);
+    if (s.path[0] === 'camps' && ED.camps) ED.camps.deleted();
+    return;
   }
   log('the fixed set (Locus, Guardian, shop, spawns, Cores, Bindings) is moved, never deleted', 'err');
 }
@@ -1971,6 +1977,7 @@ function inspectorBody(el) {
   if (!s || selValue(s) === undefined && s.t !== 'auto') return mapInspector(el);
   if (ED.sel[s.t] && ED.sel[s.t].inspector) return ED.sel[s.t].inspector(el, s);
   if (s.t === 'obj') {
+    if (s.path[0] === 'camps' && ED.camps) return ED.camps.inspector(el, s);
     const o = objects().find(o => o.path && pathStr(o.path) === pathStr(s.path));
     el.append(h('div', { class: 'path' }, pathStr(s.path)), h('div', {}, o ? o.name : ''),
       xyInputs(() => getAt(S.doc, s.path), q => setPoint(s.path, q)));
@@ -2072,6 +2079,7 @@ function mapInspector(el) {
     h('dt', {}, 'lanes'), h('dd', {}, lanes().length + (st && st.laneLengths ? ': ' + st.laneLengths.join(' / ') + ' m' : '')),
     st ? h('dt', {}, 'graphs') : null, st ? h('dd', {}, `${st.playerAreas} (Player) / ${st.npcAreas} (NPC) areas`) : null,
     h('dt', {}, 'check'), h('dd', {}, link($('checkState').textContent, () => ED.openWindow('check')))));
+  el.append(h('p', { class: 'small', 'data-units-pointer': '' }, 'Camps, wells and ward spots: ', link('the Units tab', () => ED.act('map.addCamp')), '.'));
   const bs = S.report ? botsSummary() : null;
   if (bs && bs.text) el.append(h('p', { class: 'small' + (bs.uneven ? ' warn' : '') }, bs.text));
   el.append(h('p', { class: 'small' }, 'Map > ', link('Properties...', () => ED.act('map.properties')), ', ', link('Options...', () => ED.act('map.options')),

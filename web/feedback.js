@@ -53,7 +53,8 @@ const FB = (() => {
     if (!S.doc || !p) return null;
     if (!ex && (S.tool === 'well' || S.tool === 'camp')) { // + Well, + Camp: no snap onto a place it would be refused
       const path = [S.tool === 'well' ? 'wells' : 'camps', 0, 'pos'];
-      ex = { ok: q => !objFails(path, q).length };
+      // a camp may be clicked on team 2's half (camps.js places its source at the mirror)
+      ex = { ok: q => !objFails(path, S.tool === 'camp' && q[0] + q[1] > 0 ? mir(q) : q).length };
     }
     if (F.on && !(e && e.ctrlKey)) {
       const s = smart(p, ex || {});
@@ -334,6 +335,10 @@ const FB = (() => {
     render();
     return true;
   }
+  // what camps.js asks: the rules a camp at p breaks, a refusal it decided itself, the hover's snap
+  ED.placeFails = (tool, p) => objFails([tool === 'well' ? 'wells' : 'camps', 0, 'pos'], p);
+  ED.flashRefusal = (bad, p) => { flash(bad, { pt: p }, p); render(); };
+  ED.snapNow = () => F.snap;
   const BLOCKING = ['wall', 'chasm', 'island'];
   // refuseShapes: new terrain shapes (a drawn shape, a brush stroke) that would leave an object on blocked ground
   function refuseShapes(list) {
@@ -548,6 +553,7 @@ const FB = (() => {
       out.push(`Brush ${S.brush.size} m${S.brush.shape === 'square' ? ' square' : ''}` + (S.tool === 'shape' ? ' \u00B7 ' + newType() : ''));
     } else if (['well', 'camp', 'ward'].includes(S.tool) && S.mouseW) {
       const p = F.snap ? F.snap.p : S.mouseW;
+      if (S.tool === 'camp' && ED.camps) for (const l of ED.camps.hoverLines(p)) out.push(l.bad ? { t: l.t, c: RED } : l.t);
       out.push(`centre ${m1(Math.hypot(p[0], p[1]))} m`);
     }
     const pd = !drag ? pending() : null;

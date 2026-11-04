@@ -118,9 +118,30 @@ Wall").
 
 ### Units (U)
 
-The list of the map's units: **the base** (the Locus, the Guardian, the shop, the five spawn points, the Cores and the
-Bindings, the game's towers), which can only be moved; the **neutral passive** wells and mines (*+ Well*, *+ Mine*),
-the **neutral hostile** camps (*+ Camp*) and **the bots' ward spots** (*+ Ward spot*). A click selects one and jumps
+**Add a Camp** is at the top of the Units tab: open the tab (top right, or press `U`), click a camp, click the map.
+That's all a new camp takes. Map > Add a Camp and the link in the left panel lead here too, and when you delete a camp
+the editor opens this tab for you.
+
+| Camp | What it is |
+|---|---|
+| **Green buff**, **Blue buff**, **Orange buff** | killing the big creature gives its killer Power, Haste or armor for 150 seconds |
+| **Fish camp**, **Mushroom camp**, **Ugger camp** | small camps, no buff |
+| **Gold Pigs** | worth the most gold, late to appear and slow to respawn, no buff |
+| **Parasite** | the big objective; a map has one |
+
+While you choose where it goes, a ghost shows the camp, the room its creatures need and its mirror on team 2's side. It
+turns red and says why where the camp can't go. You can click on either team's half: the camp stands where you
+clicked, and its mirror on the other side. Each click places one camp, and it is left selected, so you can drag it right away.
+Esc cancels. The Parasite has no mirror. While the map has one, its button is greyed and takes you to it: drag it, or
+press Del and place a new one.
+
+**A selected camp:** its *Type* changes what lives there. *Duplicate* (`Ctrl+D`) puts a copy beside it; `Ctrl+C` and
+`Ctrl+V` paste one at the mouse. Del deletes it, and `Ctrl+Z` brings it back. The creatures, timers and rewards come with
+the type. The camp's JSON stays under *Advanced* if you'd rather write it by hand, but you never need it.
+
+Below is the list of the map's units: **the base** (the Locus, the Guardian, the shop, the five spawn points, the Cores
+and the Bindings, the game's towers), which can only be moved; the **neutral passive** wells and mines (*+ Well*,
+*+ Mine*), the **neutral hostile** camps and **the bots' ward spots** (*+ Ward spot*). A click selects one and jumps
 there; *Player* filters the list. Cores and Bindings placed automatically are drawn hollow where the editor puts them;
 dragging one makes your own points (*Back to "auto"* in the selection undoes it).
 
@@ -171,7 +192,8 @@ The editor shows what an edit does while you make it, in both views:
   a drag, a number still sets that drag (one more undo step). With a brush armed, a number sets the brush's size.
   Backspace and Esc correct the number.
 - **Hard errors are refused** where the editor can tell at once: a Locus, Guardian, shop, spawn, Core, Binding, well
-  or camp on a wall or a chasm (or an island, but for a well), past the map's edge or on team 2's half; the Guardian
+  or camp on a wall or a chasm (or an island, but for a well), past the map's edge or on team 2's half (a new camp
+  clicked there is placed instead, as the mirror of one on team 1's half); a new camp on top of another; the Guardian
   out of the south-west; a shape moved onto team 2's half; a lane knot on its neighbour; the lanes narrower than 6 m or
   wider than 80 m; a polygon crossing itself; a wall, chasm or island (drawn, brushed or moved) over one of those
   objects. The object stays where it last could; a red outline shows where you asked for, with the reason, and

@@ -132,6 +132,8 @@ body.full3d #messages, body.full3d #toolHint { display: none !important; }
 .ptab.on { display: block; }
 .grp { border: 1px solid var(--line); border-radius: 4px; margin: 0 0 8px; padding: 4px 8px 8px; background: #22262e; }
 .grp.armed { border-color: var(--accent); }
+.grp.attn { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); animation: attn .5s ease-in-out 5 alternate; }
+@keyframes attn { from { box-shadow: 0 0 0 0 transparent; } to { box-shadow: 0 0 0 3px var(--accent); } }
 .grp.off { opacity: .55; }
 .grp > .gh { display: flex; align-items: center; gap: 6px; margin: 2px 0 6px; font-weight: 600; }
 .grp > .gh .k { margin-left: auto; font-weight: normal; }
@@ -150,6 +152,14 @@ body.full3d #messages, body.full3d #toolHint { display: none !important; }
 .cliffs button .we { font-size: 10px; color: var(--dim); }
 .cliffs button.on .we { color: #bcd; }
 .cliffs .glyph { width: 40px; height: 14px; }
+.camptypes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.camptypes button { padding: 5px 2px 4px; display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
+.camptypes button.taken { opacity: .55; }
+.camptypes .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+.camptypes .nm { line-height: 1.15; text-align: center; }
+.camptypes .we { font-size: 10px; color: var(--dim); }
+.camptypes button.on .we { color: #bcd; }
+label.camptype { display: block; margin: 4px 0; }
 .sizes button { min-width: 34px; padding: 2px 4px; }
 .list { border: 1px solid var(--line); border-radius: 3px; background: #1a1d23; overflow: auto; }
 .list .li { display: flex; align-items: center; gap: 8px; padding: 3px 8px; cursor: pointer; border-bottom: 1px solid #262b33; }
@@ -208,6 +218,7 @@ label.ck { display: inline-flex; align-items: center; gap: 4px; margin-right: 8p
 #stSnap.off { color: var(--dim, #888); text-decoration: line-through; }
 #status .fail { color: var(--err); }
 #st4flash { color: var(--err); overflow: hidden; text-overflow: ellipsis; }
+#st4flash.tip { color: var(--accent); }
 #testState { padding: 0 7px; }
 
 /* windows: the Map menu's and the Advanced menu's panels, the Map Check */

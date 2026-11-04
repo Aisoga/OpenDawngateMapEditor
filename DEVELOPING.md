@@ -39,6 +39,7 @@ that speaks it; raise `version` for every release of the zip.
 | `web/view3d.js` | the 3-D view (the main view's other mode): a glTF loader for `mapc`'s subset, the renderer, the cameras |
 | `web/heights.js` | heights (EDUX9): Terrain > Apply Height (shown only while a wall or chasm is selected), the selected wall's or chasm's height field (`HT.field`, also in the selection's info), the 3-D height handle, the self-test `height3d` |
 | `web/feedback.js` | feedback while editing: the measurements at the cursor and in the status bar, the labelled snaps (Tools > Smart Snaps, the status bar's Snap part), typed values, the hard rule breaks refused while dragging and drawing (a red ghost), the check's other findings marked on the object and its mirror twin, the Map Check window's jump; the self-test `feedback` |
+| `web/camps.js` | the camps by name: Units > Add a Camp (the type table, the tool, its ghost), the selected camp's info and *Type*, its Duplicate, copy and paste; the self-tests `camps`, `camps-save`. `ED.camps` is what app.js, frame.js and feedback.js ask |
 | `web/relief.js` | the live ground preview: the compiler's raster, field and relief rule in JavaScript, the 3-D ground mesh and 2-D cells patched while a terrain edit is under way, texture strokes and stamps painted onto the ground before the bake; the self-tests `live3d` and `draw3d` |
 | `templates/<name>/` | the templates *New from template* offers: map packages (`map.json`, `ground/*.png`) |
 | `editor.json` | the page's version and the API it speaks |
@@ -48,7 +49,7 @@ that speaks it; raise `version` for every release of the zip.
 ## The hub `ED` (app.js)
 
 A part of the page plugs in through `ED`; `props.js` is the example to copy. The scripts load in the order app.js,
-frame.js, view3d.js, props.js, propsel.js, ground.js, void.js, overlays.js, relief.js, heights.js, feedback.js; app.js starts (loads the state, opens a map, runs a
+frame.js, view3d.js, props.js, propsel.js, ground.js, void.js, overlays.js, relief.js, heights.js, feedback.js, camps.js; app.js starts (loads the state, opens a map, runs a
 self-test) once all of them have loaded.
 
 - **Events:** `ED.on('open' | 'doc' | 'preview' | 'checked' | 'select' | 'saved' | 'view' | 'tool' | 'tab' |
@@ -234,6 +235,7 @@ sites. A list with optional members goes through `h` or `appendAll(el, ...)` (ap
 | `overlays` | CM_Ring, CM_Marsh | View > Gameplay Overlays: the menu's items, the lanes' lengths and the walks against values computed apart from the page from the same check, the seconds, the rings, lanes and paths drawn in 2-D and 3-D and following a moved Binding, knot and spawn, the comparison with SM_Map_v5, the Gameplay Numbers window, everything off |
 | `feedback` | CM_Ring | feedback while editing, by real events: the measurements of a knot's, a Binding's and the width handle's drag, the brush, a circle being drawn; each snap with its label (Mirror line, Lane edge, Midpoint, Grid, Shift's Grid 1 m; Ctrl and the status bar's switch leave them out; a dragged corner); typed values (a knot's distance during and after a drag, x,y, a radius, the lanes' width and its refusal, a circle, a polygon's legs, the brush); each refusal (a corner across its polygon while dragging and drawing, a closing edge, the Guardian into a wall with its red ghost, + Well and a drag on team 2's half, a knot on its neighbour, the lanes below 6 m, a wall polygon, a wall stroke and the base's circle moved off the Guardian); a bush brushed and one drawn as a Path written as polygons, no `terrain.shape` error; the soft marks on the object and its twin, following a drag; the Map Check window's jumps; in 3-D the jump, the marks, a knot's measurement and typed value, the Guardian refused, a snap's label. Run it at 1280 x 800 |
 | `water3d` | a map with watered chasms | the water planes' places and z, the picture turning teal, an edit of the water's z |
+| `camps`, `camps-save` | CM_Grove (`?open=CM_Grove&selftest=camps`) | finding Add a Camp from the Terrain tab (the tooltips, the left panel's link, Map > Add a Camp, a deleted camp's pulse and status line, Ctrl+X not taking you away), then Units > Add a Camp: every type by its button (the hint, what is written, back to Select, the list, the status bar, the preview, its *Type*), the check taking them all, a click on team 2's half, the parasite (one, its button going to it, no twin, past the mirror line), the refusals, a real click, *Type*, a camp with no noun or an unnamed one, Duplicate, Ctrl+C, Ctrl+X, Ctrl+V, Apply JSON, every edit undone; any uncaught error fails it. `camps-save` saves the map with one new camp of each type, for `mapc build`. Run them at 1280 x 800 |
 
 **Headless:** Edge or Chrome runs them without a window:
 
@@ -259,7 +261,9 @@ msedge --headless=new --user-data-dir=<scratch> --virtual-time-budget=20000 --du
   with the corridor and the width handle, the scatter regions and footprints; `&pose6=measure|snap|refused|typed|marks`
   (feedback.js, CM_Ring; `measure_3d`, `refused_3d`, `marks_3d` with `&view=3d`) a Binding's drag with its
   measurements, a corner snapped to a lane's edge, the Guardian refused in a wall, a number typed during a drag, the
-  soft marks after the Map Check window's jump.
+  soft marks after the Map Check window's jump; `&pose7=armed|team2|refused|selected` (camps.js, CM_Grove, with
+  `&tab=units`) the camp's ghost and its twin, the same with the mouse on team 2's half, the ghost on a wall, a camp's
+  info; `&pose7=deleted` (with `&tab=terrain`) a camp just deleted, the Units tab opened and Add a Camp pulsing.
 
 ## The HTTP API (loopback only)
 
