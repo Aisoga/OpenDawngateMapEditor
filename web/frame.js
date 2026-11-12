@@ -156,7 +156,8 @@ const FR = (() => {
       { t: 'Follow the Selection (3-D)', check: () => typeof V3D !== 'undefined' && V3D.V.follow, act: () => { V3D.V.follow = !V3D.V.follow; } },
       '-',
       { t: 'Background Layer', sub: 'bg' },
-      { t: 'Pathing (the Player graph)', k: 'P', check: () => S.bg === 'graph_player.png', act: togglePathing },
+      { t: 'Pathing (the Player graph)', k: 'P', note: 'green walked, red too narrow, orange cut off', check: () => S.bg === 'graph_player.png', act: () => togglePathing('graph_player.png') },
+      { t: 'Pathing (the NPC graph)', note: 'where camps, wells and minions walk', check: () => S.bg === 'graph_npc.png', act: () => togglePathing('graph_npc.png') },
       { t: 'Grid (20 m)', k: 'G', ...tog('grid') },
       { head: 'Show' },
       { t: 'Terrain Shapes', ...tog('shapes') }, { t: 'Team 2\'s Mirror', ...tog('mirror') },
@@ -258,7 +259,9 @@ const FR = (() => {
     ED.setView('3d');
     V3D.setScene(level);
   }
-  function togglePathing() { setBg(S.bg === 'graph_player.png' ? 'layout.png' : 'graph_player.png'); }
+  // the graph's picture as the background, or back to the layout (EDNARROW: either graph; both paint what they leave
+  // out, red too narrow for any square, orange cut off from the bases)
+  function togglePathing(file) { const f = typeof file === 'string' ? file : 'graph_player.png'; setBg(S.bg === f ? 'layout.png' : f); }
   function toggleMessages() { $('messages').classList.toggle('hidden'); resize(); }
   ED.actions['view.messages'] = toggleMessages;
 

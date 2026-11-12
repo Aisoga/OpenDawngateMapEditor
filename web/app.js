@@ -817,8 +817,8 @@ function render() {
   if (S.show.findings && S.report) drawFindings(VIEW2D);
 }
 
-// drawFindings marks the check's findings at their places through the view v (a ring, the rule; a reach.dropped
-// finding's cut-off parts as dashed circles)
+// drawFindings marks the check's findings at their places through the view v (a ring, the rule; the parts of a
+// reach.dropped or reach.narrow finding as dashed circles)
 function drawFindings(v) {
   if (!S.show.findings || !S.report) return;
   const g = v.overlay;
@@ -836,8 +836,8 @@ function drawFindings(v) {
     g.fillStyle = g.strokeStyle;
     g.font = `bold ${10 * dpr}px Segoe UI, sans-serif`;
     g.fillText(f.rule, p[0] + 13 * dpr, p[1] - 9 * dpr);
-    for (const [k, part] of (f.parts || []).entries()) { // reach.dropped: every cut-off part (MAPED-EDIT6)
-      const sel = S.sel && S.sel.t === 'part' && S.sel.k === k;
+    for (const [k, part] of (f.parts || []).entries()) { // reach.dropped, reach.narrow: every part (MAPED-EDIT6, EDNARROW)
+      const sel = S.sel && S.sel.t === 'part' && S.sel.k === k && partRule(S.sel) === f.rule;
       g.setLineDash([4 * dpr, 3 * dpr]);
       g.lineWidth = (sel ? 3 : 1.5) * dpr;
       vring(v, part.centre, Math.max(6 * vmpp(v, part.centre), part.r));
@@ -2078,6 +2078,7 @@ function mapInspector(el) {
     h('dt', {}, 'units'), h('dd', {}, n('wells') + ' wells, ' + n('camps') + ' camps, ' + n('wards') + ' ward spots'),
     h('dt', {}, 'lanes'), h('dd', {}, lanes().length + (st && st.laneLengths ? ': ' + st.laneLengths.join(' / ') + ' m' : '')),
     st ? h('dt', {}, 'graphs') : null, st ? h('dd', {}, `${st.playerAreas} (Player) / ${st.npcAreas} (NPC) areas`) : null,
+    st ? h('dt', {}, 'paths') : null, st ? h('dd', { title: "How wide open ground must be for the graphs' squares: narrower ground is left out of them, and nobody walks it in game" }, graphWidths(st)) : null,
     h('dt', {}, 'check'), h('dd', {}, link($('checkState').textContent, () => ED.openWindow('check')))));
   el.append(h('p', { class: 'small', 'data-units-pointer': '' }, 'Camps, wells and ward spots: ', link('the Units tab', () => ED.act('map.addCamp')), '.'));
   const bs = S.report ? botsSummary() : null;
@@ -2188,44 +2189,65 @@ function renderFindings() {
     const row = h('div', { class: 'f ' + (f.severity || ''), 'data-rule': f.rule, 'data-path': f.path || '',
       onmouseenter: () => { S.hoverFinding = f; render(); }, onmouseleave: () => { S.hoverFinding = null; render(); },
       onclick: () => {
-        if (Array.isArray(f.parts) && f.parts.length) return selectPart(f, 'next'); // reach.dropped: part by part
+        if (Array.isArray(f.parts) && f.parts.length) return selectPart(f, 'next'); // reach.dropped, reach.narrow: part by part
+        if (f.shape && f.at) { // reach.npc, lanes.graph on ground too narrow (EDNARROW): the shape to widen, at the object
+          selectPath(f.shape);
+          if (typeof FR !== 'undefined') FR.centre(f.at); else { S.view.x = f.at[0]; S.view.y = f.at[1]; S.fitted = false; render(); }
+          return;
+        }
         if (ED.jumpFinding && ED.jumpFinding(f)) return; // feedback.js: select it and show it in the view shown
         if (f.path) selectPath(f.path);
         if (f.at) { if (typeof FR !== 'undefined') FR.centre(f.at); else { S.view.x = f.at[0]; S.view.y = f.at[1]; S.fitted = false; render(); } } // either view
       } },
     h('div', { class: 'rule' }, (f.severity === 'warning' ? 'warning ' : 'error ') + f.rule), where ? h('div', { class: 'where' }, where) : null,
     h('div', {}, f.message || ''),
-    Array.isArray(f.parts) && f.parts.length > 1 ? h('div', { class: 'small' }, `${f.parts.length} parts: click again for the next`) : null);
+    Array.isArray(f.parts) && f.parts.length > 1 ? h('div', { class: 'small' }, `${f.parts.length} parts: click again for the next`) : null,
+    f.shape ? h('div', { class: 'small' }, `click: selects ${f.shape}, to widen it`) : null);
     el.append(row);
   }
   const st = r.stats;
-  $('stats').textContent = st ? `graphs ${st.playerAreas} (Player) / ${st.npcAreas} (NPC) areas of ${st.cell} cells, lanes ${(st.laneLengths || []).join(' / ')} m, ${st.bushes} bushes, ${st.wells} wells` : '';
+  $('stats').textContent = st ? `graphs ${st.playerAreas} (Player) / ${st.npcAreas} (NPC) areas of ${st.cell} cells (paths ${graphWidths(st)}), lanes ${(st.laneLengths || []).join(' / ')} m, ${st.bushes} bushes, ${st.wells} wells` : '';
   const bs = botsSummary();
   $('botsInfo').textContent = bs.text;
   $('botsInfo').classList.toggle('warn', bs.uneven);
 }
 
-// selectPart selects a cut-off part of a reach.dropped finding (the next one on each call) and centres it, zoomed in
-// far enough to see it
+// graphWidths: how wide open ground must be for the graphs' squares, from the check's stats (EDNARROW; before it,
+// feedback.js computes them from the square size)
+function graphWidths(st) {
+  const [a, b] = Array.isArray(st.pathWidth) ? st.pathWidth : ED.pathWidths ? ED.pathWidths() : [0, 0];
+  const sq = (st.cell * (st.cellSize || 0)).toFixed(1);
+  return a ? `from ${a} m across, ${b} m at an angle (${sq}-m squares)` : `${sq}-m squares`;
+}
+
+// selectPart selects a part of a finding with parts (reach.dropped's cut-off ground, reach.narrow's thin ground; the
+// next one on each call) and centres it, zoomed in far enough to see it
 function selectPart(f, k) {
   const n = f.parts.length;
-  if (k === 'next') k = S.sel && S.sel.t === 'part' ? (S.sel.k + 1) % n : 0;
+  if (k === 'next') k = S.sel && S.sel.t === 'part' && partRule(S.sel) === f.rule ? (S.sel.k + 1) % n : 0;
   const p = f.parts[k];
-  select({ t: 'part', k });
+  select({ t: 'part', k, rule: f.rule });
   S.view.x = p.centre[0];
   S.view.y = p.centre[1];
   S.view.scale = Math.max(S.view.scale, Math.min(cv.width, cv.height) / Math.max(60, 4 * p.r));
   S.fitted = false;
   render();
 }
-function droppedFinding() { return S.report && (S.report.findings || []).find(f => f.rule === 'reach.dropped' && Array.isArray(f.parts)); }
+const partRule = sel => sel.rule || 'reach.dropped';
+function partFinding(sel) { return S.report && (S.report.findings || []).find(f => f.rule === partRule(sel) && Array.isArray(f.parts)); }
+// what a part is and what to do (EDNARROW: the widths from the check, no longer "about 4 m")
+function partHelp(rule) {
+  const st = (S.report && S.report.stats) || {}, w = st.cell ? graphWidths(st) : 'about twice the square size';
+  if (rule === 'reach.narrow') return `Walkable ground too narrow for the graphs' squares: they leave it out, so nobody walks it in game. Open ground holds them ${w}: widen it, or close it with a wall shape. Team 2's mirror is the same ground (the squares may fit it a little differently).`;
+  return `Walkable ground the graphs leave out: nothing joins it to the bases that the graphs can hold (open ground holds their squares ${w}). Open or widen a path to it, or close it with a wall shape. Team 2's mirror has the same.`;
+}
 ED.sel.part = {
-  value: sel => { const f = droppedFinding(); return f ? f.parts[sel.k] : undefined; },
+  value: sel => { const f = partFinding(sel); return f ? f.parts[sel.k] : undefined; },
   inspector: (el, sel) => {
-    const f = droppedFinding(), p = f.parts[sel.k], cs = (S.preview && S.preview.size || +S.doc.size || 400) / (S.preview && S.preview.grid || 512);
-    el.append(h('div', { class: 'path' }, `reach.dropped: part ${sel.k + 1} of ${f.parts.length}`),
+    const f = partFinding(sel), p = f.parts[sel.k], cs = (S.preview && S.preview.size || +S.doc.size || 400) / (S.preview && S.preview.grid || 512);
+    el.append(h('div', { class: 'path' }, `${f.rule}: part ${sel.k + 1} of ${f.parts.length}`),
       h('div', {}, `${p.cells} cells (${Math.round(p.cells * cs * cs)} m²) round (${p.centre[0]}, ${p.centre[1]}), about ${p.r} m across from its centre`),
-      h('p', { class: 'small' }, 'Walkable ground the graphs leave out: nothing joins it to the bases (or a neck is narrower than the graphs\' squares, about 4 m). Open a path to it, widen the neck, or close it with a wall shape. Team 2\'s mirror has the same.'),
+      h('p', { class: 'small' }, partHelp(f.rule)),
       h('div', { class: 'btns' }, f.parts.length > 1 ? h('button', { onclick: () => selectPart(f, 'next') }, 'Next part') : null));
   },
   move: () => {},

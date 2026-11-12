@@ -338,6 +338,130 @@ const FB = (() => {
   // what camps.js asks: the rules a camp at p breaks, a refusal it decided itself, the hover's snap
   ED.placeFails = (tool, p) => objFails([tool === 'well' ? 'wells' : 'camps', 0, 'pos'], p);
   ED.flashRefusal = (bad, p) => { flash(bad, { pt: p }, p); render(); };
+
+  // ---- the NPC graph (EDNARROW): may a camp or a well's workers stand here? ------------------------------------------
+  // The check's rule reach.npc wants a camp, and each point of a well's workers' ring (8 m), within one graph square of
+  // the NPC graph. The page reads the last check's graph_npc.png into a code a pixel (512 x 512, north up): 1 a square
+  // (green) or a Guardian's island (yellow), 2 walkable ground too narrow for any square (red), 3 squares cut off from
+  // the bases (orange), 0 the rest. A backend before EDNARROW paints neither red nor orange: then the reason is the
+  // plain one. The picture is the last passing check's, so while the ground's inputs differ from what it shows (a
+  // terrain edit not checked yet) the answer is null: no warning rather than a stale one. A warning never refuses.
+  // G: the decoded picture (codes), the ground it shows (key: groundKey of the document that check compiled), and that
+  // check's square size and widths; doc caches the document's key until the next edit
+  const G = { codes: null, key: null, loading: '', size: 0, cell: 0, cs: 0, widths: null, doc: null, red: null, reds: 0 };
+  const groundKey = d => (d && typeof d === 'object' ? JSON.stringify([d.size, d.terrain, d.lanes, d.base, d.wells, d.props, d.scatter, d.graph]) : '');
+  // the widths open ground needs to hold the squares (the check's stats.pathWidth; before EDNARROW computed as
+  // mapc's narrow.go does: 2 x cell + 1 cells along the axes, its table at an angle)
+  function pathWidths(st) {
+    if (st && Array.isArray(st.pathWidth) && st.pathWidth.length === 2) return st.pathWidth;
+    const cell = (st && st.cell) || 4, cs = (st && st.cellSize) || 450 / 512, up = v => Math.ceil(v * 2 - 1e-9) / 2;
+    return [up((2 * cell + 1) * cs), up(({ 2: 6, 3: 9, 4: 12 }[cell] || 3 * cell) * cs)];
+  }
+  ED.pathWidths = () => pathWidths((S.preview && S.preview.report && S.preview.report.stats) || (S.report && S.report.stats));
+  function loadNPCGraph(key, geo) {
+    const url = S.images + 'graph_npc.png';
+    if (G.loading === url) return;
+    G.loading = url;
+    const img = new Image();
+    img.onload = () => {
+      if (G.loading !== url) return;
+      const c = document.createElement('canvas');
+      c.width = 512; c.height = 512;
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.drawImage(img, 0, 0);
+      const px = g.getImageData(0, 0, 512, 512).data, codes = new Uint8Array(512 * 512);
+      for (let k = 0; k < codes.length; k++) {
+        const r = px[4 * k], gr = px[4 * k + 1], b = px[4 * k + 2];
+        codes[k] = gr > r + 30 || (r > 200 && gr > 180 && b < 100) ? 1 : r > 150 && gr < 100 && b < 100 ? 2 : r > 180 && gr >= 100 && gr <= 180 && b < 90 ? 3 : 0;
+      }
+      // the narrow ground red, for the 2-D view under the shapes (EDNARROW: drawn while Check Findings is shown)
+      const red = document.createElement('canvas');
+      red.width = 512; red.height = 512;
+      const rg = red.getContext('2d'), rd = rg.createImageData(512, 512);
+      let reds = 0;
+      for (let k = 0; k < codes.length; k++) {
+        if (codes[k] !== 2) continue;
+        rd.data.set([255, 60, 60, 150], 4 * k);
+        reds++;
+      }
+      rg.putImageData(rd, 0, 0);
+      Object.assign(G, geo, { codes, key, loading: '', red: reds ? red : null, reds });
+      render();
+    };
+    img.onerror = () => { if (G.loading === url) G.loading = ''; };
+    img.src = url;
+  }
+  // after each check with pictures: the same ground as the picture held keeps it (a camp placed or moved changes no
+  // graph, so there is no gap while the new picture would load); other ground loads the new one
+  ED.on('checked', () => {
+    if (!S.preview || !S.images) return;
+    const st = (S.preview.report && S.preview.report.stats) || (S.report && S.report.stats) || {};
+    let key = null;
+    try { key = groundKey(JSON.parse(S.previewJSON)); } catch (e) { key = null; }
+    const geo = { size: +S.preview.size, cell: st.cell || 0, cs: st.cellSize || (+S.preview.size / 512), widths: pathWidths(st) };
+    if (key !== null && key === G.key && G.codes) { Object.assign(G, geo); return; }
+    loadNPCGraph(key, geo);
+  });
+  ED.on('doc', () => { G.doc = null; });
+  ED.on('open', () => { Object.assign(G, { codes: null, key: null, loading: '', doc: null, red: null, reds: 0 }); });
+  // the last check's narrow ground in red over the 2-D view's background (not over a Pathing picture, which has it)
+  ED.on('render-bg', g => {
+    if (!G.red || !S.show.findings || /^graph_/.test(S.bg || '') || !G.size) return;
+    const h = G.size / 2, a = w2s([-h, h]), b = w2s([h, -h]);
+    g.save();
+    g.imageSmoothingEnabled = false;
+    g.drawImage(G.red, a[0], a[1], b[0] - a[0], b[1] - a[1]);
+    g.restore();
+  });
+  ED.narrowShown = () => (G.red && S.show.findings && !/^graph_/.test(S.bg || '') ? G.reds : 0);
+  const fresh = () => {
+    if (!G.codes || !G.cell || G.key === null) return false;
+    if (G.doc === null) G.doc = groundKey(S.doc);
+    return G.doc === G.key;
+  };
+  // graphNear: the check's test at world point p (navgraph.BlockOf, then the 3 x 3 squares round it): 'on', 'cut',
+  // 'narrow', 'off', or null when the picture can't say
+  function graphNear(p) {
+    if (!isPt(p) || !fresh()) return null;
+    const cell = G.cell, half = 256;
+    const bx = Math.floor((p[0] / G.cs + half + 0.5) / cell), by = Math.floor((p[1] / G.cs + half + 0.5) / cell);
+    let cut = false, narrow = false;
+    for (let y = by - 1; y <= by + 1; y++) {
+      for (let x = bx - 1; x <= bx + 1; x++) {
+        for (let dj = 0; dj < cell; dj++) {
+          for (let di = 0; di < cell; di++) {
+            const i = x * cell + di, j = y * cell + dj;
+            if (i < 0 || j < 0 || i >= 512 || j >= 512) continue;
+            const c = G.codes[(511 - j) * 512 + i];
+            if (c === 1) return 'on';
+            if (c === 3) cut = true;
+            if (c === 2) narrow = true;
+          }
+        }
+      }
+    }
+    return cut ? 'cut' : narrow ? 'narrow' : 'off';
+  }
+  // graphWhy: what reach.npc will say of a camp (or a ring point) at p, as a sentence; '' when it is on the graph or
+  // the picture can't say
+  function graphWhy(p) {
+    const s = graphNear(p);
+    if (!s || s === 'on') return '';
+    const [st, dg] = G.widths || pathWidths(null), sq = m1(G.cell * G.cs);
+    if (s === 'cut') return 'off the NPC graph: its ground is cut off from the bases';
+    if (s === 'narrow') return `off the NPC graph: the ground here is too narrow; it needs ${st} m (${dg} m at an angle)`;
+    return `off the NPC graph (open ground needs ${st} m across, ${dg} m at an angle; the graph's squares are ${sq} m)`;
+  }
+  // ED.graphWarn: the warning for a camp at p, or for a well's workers' ring (8 points at 8 m, the check's): '' for none
+  ED.graphWarn = (tool, p) => {
+    if (tool !== 'well') return graphWhy(p);
+    for (let a = 0; a < 8; a++) {
+      const q = [p[0] + 8 * Math.cos(a * Math.PI / 4), p[1] + 8 * Math.sin(a * Math.PI / 4)], why = graphWhy(q);
+      if (why) return `its workers' ring (8 m) leaves the NPC graph at (${m1(q[0])}, ${m1(q[1])})` + why.replace(/^off the NPC graph/, '');
+    }
+    return '';
+  };
+  ED.graphNear = graphNear;
   ED.snapNow = () => F.snap;
   const BLOCKING = ['wall', 'chasm', 'island'];
   // refuseShapes: new terrain shapes (a drawn shape, a brush stroke) that would leave an object on blocked ground
@@ -522,6 +646,10 @@ const FB = (() => {
         const o = objects().find(x => sameSel(objSel(x), drag.sel));
         out.push(`${o ? o.name : 'object'}${drag.mirrored ? ' (team 2\'s twin)' : ''}: moved ${m1(dist(v, drag.orig))} m \u00B7 centre ${m1(Math.hypot(v[0], v[1]))} m`);
         if (o && o.kind === 'binding') out.push(...bindingLines(v, drag.sel));
+        if (o && (o.kind === 'camp' || o.kind === 'well') && ED.graphWarn) { // EDNARROW: a warning, the drag goes on
+          const why = ED.graphWarn(o.kind, v);
+          if (why) out.push({ t: why, c: RED });
+        }
       } else if (t === 'knot' && isPt(v)) {
         const l = lanes()[drag.sel.l], ks = l.knots, k = drag.sel.k, len = polyLen(ks), d = len - ((drag.fb && drag.fb.len0) || len);
         const legs = [k - 1, k + 1].filter(j => isPt(ks[j])).map(j => m1(dist(ks[j], v)));
@@ -548,18 +676,31 @@ const FB = (() => {
       else if (d.pts && d.pts.length) {
         const last = d.pts[d.pts.length - 1], leg = d.mouse ? dist(last, d.mouse) : 0, tot = polyLen(d.pts) + leg;
         out.push(`leg ${m1(leg)} m \u00B7 ${d.geom === 'polygon' ? 'edges' : 'length'} ${m1(tot)} m` + (d.geom === 'polygon' && d.mouse && d.pts.length > 1 ? ` \u00B7 closing ${m1(dist(d.mouse, d.pts[0]))} m` : '') + (d.geom === 'path' ? ` \u00B7 width ${m1(Math.max(1, S.brush.size))} m` : ''));
+        if (d.geom === 'path') out.push(...narrowLines(Math.max(1, S.brush.size)));
       }
     } else if (S.draw === 'brush' && (S.tool === 'shape' || S.tool === 'paint') && S.mouseW) {
       out.push(`Brush ${S.brush.size} m${S.brush.shape === 'square' ? ' square' : ''}` + (S.tool === 'shape' ? ' \u00B7 ' + newType() : ''));
+      if (S.tool === 'shape') out.push(...narrowLines(+S.brush.size || 0));
     } else if (['well', 'camp', 'ward'].includes(S.tool) && S.mouseW) {
       const p = F.snap ? F.snap.p : S.mouseW;
       if (S.tool === 'camp' && ED.camps) for (const l of ED.camps.hoverLines(p)) out.push(l.bad ? { t: l.t, c: RED } : l.t);
+      if (S.tool === 'well') { // EDNARROW: the check looks at team 1's well, the source of a click on team 2's half
+        const why = ED.graphWarn('well', p[0] + p[1] > 0 ? mir(p) : p);
+        if (why) out.push({ t: why, c: RED });
+      }
       out.push(`centre ${m1(Math.hypot(p[0], p[1]))} m`);
     }
     const pd = !drag ? pending() : null;
     if (pd && pd.bad) out.push({ t: `refused: ${pd.bad.why} (${pd.bad.rule})`, c: RED });
     if (F.typed) out.push({ t: `typed: ${F.typed}\u258F Enter sets ${typedWhat(typedCtx())}`, c: SNAP });
     return out;
+  }
+  // narrowLines: a path or brush of open ground narrower than the graphs need (EDNARROW): nobody walks it in game
+  function narrowLines(width) {
+    if (newType() !== 'open' || !(width > 0)) return [];
+    const [st, dg] = ED.pathWidths();
+    if (width >= st) return width < dg ? [{ t: `${m1(width)} m holds the graphs' squares north-south or east-west, not at an angle (${dg} m)`, c: SNAP }] : [];
+    return [{ t: `narrower than ${st} m: the graphs leave it out, nobody walks it (${dg} m at an angle)`, c: RED }];
   }
   const txt = l => (typeof l === 'string' ? l : l.t);
   // measureText: the status bar's selection part while something is being edited (a drag, a drawing, a number typed)

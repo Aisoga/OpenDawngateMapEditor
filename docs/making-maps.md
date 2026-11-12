@@ -154,6 +154,13 @@ see-through layer that tints what lies under it), `fog` (`start`, `end`, `color`
 **The graph** (`graph`): the walking graphs are made of squares; a smaller square (`"cell": 2`) brings the walkable
 ground nearer the walls. Without it the compiler picks the smallest square that keeps both graphs under 7,000 areas.
 
+**How wide a path must be:** a square only exists where all of its cells are walkable, after the walkable ground has
+been shrunk by one cell along every edge, and the squares sit on a fixed grid. So open ground narrower than about two
+squares holds none, and nobody walks it in game: not the champions, not the minions, not a camp's creatures. On a
+450-m map with the usual 3.5-m squares, a path running north-south or east-west needs about **8 m**, one at an angle
+about **11 m**; the editor shows the numbers for your map under *paths* in the map's facts, the check names them in
+`reach.narrow`, and the map shows such ground in red (with the check's findings shown).
+
 ### Camps by name
 
 In the editor, Units > Add a Camp and a selected camp's *Type* use these names and write `kind` and `noun` for you. The
@@ -272,13 +279,14 @@ These run on the compiled layout and its walking graphs.
 | `fixed.hole` | something but the Guardian and the Cores stands within about 10 m (plus a square) of a Guardian, where the walking graph has its hole | move it away from the Guardian |
 | `fixed.range` | a Binding is too far from its lane to cover the corridor (its distance plus half the corridor's width over 31 m) | move the Binding nearer the lane, or narrow the lane |
 | `fixed.tiers` | along the lane from the own base the Bindings aren't Inner, Middle, Outer in that order, or the Outer (with two tiers the Middle) lies past the lane's middle | reorder or move the Bindings |
-| `lanes.graph` | a knot, or the straight line between two knots, leaves the creatures' walking graph | widen the lane's corridor, or move the knot off the wall |
+| `lanes.graph` | a knot, or the straight line between two knots, leaves the creatures' walking graph; the message says why where it can (which shape is too narrow and how wide it must be, or that the ground is cut off) | widen the lane's corridor, or move the knot off the wall |
 | `lanes.start` | a lane's minion spawner (21 m behind its first knot) isn't on the walking graph next to the first knot | move the first knot, or open the ground behind it |
 | `lanes.end` | a lane's last knot is more than 25 m from an enemy Core or the enemy Guardian, so the minions stop short | end the lane at the enemy base |
 | `reach.islands` | the two bases' first spawn points aren't joined by walkable ground | open a way between the bases |
 | `reach.player` | an object (but the Guardian, the camps and the wells on islands) can't be walked to from the bases | open a way to it |
-| `reach.npc` | a well's workers' ring or a camp isn't on the creatures' walking graph | open the ground round it |
-| `reach.dropped` (warning) | walkable ground that nothing joins to the bases; it's left out of the graphs (the editor draws each cut-off part) | join it to the rest, or make it a wall |
+| `reach.npc` | a well's workers' ring or a camp isn't on the creatures' walking graph; the message says why: the shape under it is too narrow, with its width and the width it needs (see *How wide a path must be*; clicking the finding selects that shape), or its ground is cut off from the bases. The editor warns while you place or drag a camp or well there | widen the path under it, or put the camp in a clearing (its creatures stand up to about 9 m round it) |
+| `reach.dropped` (warning) | walkable ground that nothing joins to the bases; it's left out of the graphs (the editor draws each cut-off part) | join it to the rest with a path wide enough for the graphs, or make it a wall |
+| `reach.narrow` (warning) | walkable ground too narrow for any graph square (a thin path, a narrow gap between props), so nobody walks it; the message gives the widths for the map, and the editor draws each part and shows the ground red | widen it, or make it a wall |
 | `reach.island` | a well on an island is within 12 m of ground champions walk (an error: they could take it without a fight), or within 39 m (a warning: a dash reaches it) | move the well or the island's edge away |
 | `terrain.edge` (warning) | open ground or a chasm within 4 cells of the map's edge | keep a wall along the edge |
 | `budget.areas` | a walking graph has 7,000 areas or more even at the largest squares | simplify the layout: fewer small gaps and shapes |
@@ -301,6 +309,8 @@ These come with the build's report, from the placed markers:
 
 - Start from a template: it passes every rule, so each finding afterwards is about your change.
 - Give a chasm with water about 10 m of shore inside its clearing.
+- Draw paths at least as wide as *paths* in the map's facts says (about 8 m, 11 m at an angle, on a 450-m map):
+  thinner ones are only pictures. The editor's line beside the mouse turns red while a path is too thin.
 - A blocking tree wants a footprint of its trunk (about 2 x 2 m), not of its crown.
 - Pieces of the original map's cliffs float over open ground: take dressing from its floor.
 - Test early: the bots' rally points and the Hunter's route under the check show where a change makes the map uneven.

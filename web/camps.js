@@ -27,6 +27,7 @@
   ];
   const UNKNOWN = '#ff5d5d'; // a camp whose noun no type has: blank, or written by hand
   const RED = '#ff6b6b';
+  const AMBER = '#ffb347'; // a camp off the NPC graph (EDNARROW): placed, but the check will say so
   const ROOM = 9; // about how far a camp's creatures stand from its centre (the rule camps.spots)
   const ON_TOP = 4; // closer than this to another camp is a slip (a double click), not a place
   const OFF_CENTRE = 30; // mapc's ParasiteOffCentre
@@ -46,7 +47,8 @@
   const colorOf = c => { const t = typeOf(c); return t ? t.color : UNKNOWN; };
 
   // ---- where a camp goes ---------------------------------------------------------------------------------------
-  // placement: where a camp of the type stands for the world point w, and what refuses it. Only team 1's half is
+  // placement: where a camp of the type stands for the world point w, what refuses it, and what only warns (warn: off
+  // the NPC graph, reach.npc, as far as the last check's graph_npc.png says; EDNARROW). Only team 1's half is
   // written, so a point on team 2's half places its source at the mirror and the twin stands at w; the parasite has no
   // twin, so it goes to the nearest point on team 1's side of the mirror line.
   function placement(w, once, skip) {
@@ -61,7 +63,8 @@
     let bad = ED.placeFails ? ED.placeFails('camp', p)[0] : null;
     if (!bad && !once && Math.hypot(p[0], p[1]) < ON_TOP / 2) bad = { rule: 'camps', why: 'on its own mirror: move it off the centre' };
     if (!bad && camps().some((c, i) => i !== skip && c && isPt(c.pos) && Math.hypot(c.pos[0] - p[0], c.pos[1] - p[1]) < ON_TOP)) bad = { rule: 'camps', why: 'on top of another camp' };
-    return { p, twin, bad: bad || null };
+    const warn = !bad && ED.graphWarn ? ED.graphWarn('camp', p) : '';
+    return { p, twin, bad: bad || null, warn };
   }
   function added(fields, p, what) {
     edit(d => {
@@ -79,6 +82,7 @@
     const pl = placement(w, t.once);
     if (pl.bad) { if (ED.flashRefusal) ED.flashRefusal(pl.bad, pl.twin ? mir(pl.p) : pl.p); return false; }
     added({ kind: t.kind, noun: t.noun }, pl.p, t.name + ' placed');
+    if (pl.warn) log(`${t.name} at (${pl.p[0]}, ${pl.p[1]}) is ${pl.warn}: the check will refuse the map until it stands on wider ground`, 'err');
     setTool('select');
     return true;
   }
@@ -105,6 +109,7 @@
   function hoverLines(w) {
     const t = current(), pl = placement(w, t.once), out = [{ t: t.name }];
     if (pl.bad) out.push({ t: `can't go here: ${pl.bad.why}`, bad: true });
+    else if (pl.warn) out.push({ t: pl.warn, bad: true });
     else if (t.once && Math.hypot(pl.p[0], pl.p[1]) > OFF_CENTRE) out.push({ t: `${Math.round(Math.hypot(pl.p[0], pl.p[1]))} m from the centre: keep it within ${OFF_CENTRE} m`, bad: true });
     return out;
   }
@@ -112,7 +117,7 @@
   function drawPlacing(v) {
     if (S.tool !== 'camp' || !S.doc || !S.mouseW || S.drag) return;
     const t = current(), snap = ED.snapNow ? ED.snapNow() : null, pl = placement(snap ? snap.p : S.mouseW, t.once);
-    const g = v.overlay, col = pl.bad ? RED : t.color, at = pl.twin ? mir(pl.p) : pl.p;
+    const g = v.overlay, col = pl.bad ? RED : pl.warn ? AMBER : t.color, at = pl.twin ? mir(pl.p) : pl.p;
     g.save();
     g.strokeStyle = col;
     g.lineWidth = 2 * dpr;
@@ -515,6 +520,104 @@
   ED.selftests = ED.selftests || {};
   ED.selftests.camps = selftest;
   ED.selftests['camps-save'] = selftest;
+
+  // ?selftest=narrow (EDNARROW, CM_Marsh): ground too thin for the graphs. A 6-m path into the wall south of the
+  // jungle's middle path gives reach.narrow with one part, and the NPC graph's picture reads it as too narrow; the
+  // camp tool over it warns (the line beside the mouse, the amber ghost) but places the camp, logging the warning, and
+  // the check's reach.npc says why; on wide ground, and while a terrain edit isn't checked yet, nothing warns; a path
+  // drawn 6 m wide turns the measurement red, 9 m names the angle, 12 m says nothing; the map's facts give the widths;
+  // the part selects and explains itself; View > Pathing (the NPC graph) shows the picture. Every edit undone.
+  ED.selftests.narrow = async function selftestNarrow() {
+    const out = $('selftest'), lines = [];
+    out.classList.remove('hidden');
+    const say = (ok, msg) => { lines.push((ok ? 'PASS ' : 'FAIL ') + msg); out.textContent = lines.join('\n'); return !!ok; };
+    const settle = async () => { clearTimeout(S.checkTimer); await runCheck(); };
+    const until = async (fn, ms) => { const t0 = Date.now(); while (!fn()) { if (Date.now() - t0 > ms) return false; await new Promise(r => setTimeout(r, 50)); } return true; };
+    const rules = () => (S.report.findings || []).map(f => f.rule).join(' ') || 'none';
+    const thrown = [];
+    window.addEventListener('error', e => thrown.push(e.message));
+    let ok = true;
+    if (S.pkg !== 'CM_Marsh') await openMap('CM_Marsh');
+    await settle();
+    ok &= say(S.pkg === 'CM_Marsh' && S.report && S.report.ok, 'opened CM_Marsh: ' + rules());
+    const st = S.report.stats || {};
+    ok &= say(Array.isArray(st.pathWidth) && st.pathWidth[0] === 8 && st.pathWidth[1] === 11 && JSON.stringify(ED.pathWidths()) === '[8,11]',
+      'the check gives the widths: ' + JSON.stringify(st.pathWidth));
+    select(null);
+    ok &= say(/paths\s*from 8 m across, 11 m at an angle \(3\.5-m squares\)/.test($('inspector').textContent), 'the map\'s facts name them');
+    const n0 = camps().length, at = [20, -135], wide = [-40, -120]; // wide: in the clearing of the well at (-60, -130)
+    ok &= say(await until(() => ED.graphNear(at) !== null, 10000) && ED.graphNear(at) === 'off' && ED.graphNear(wide) === 'on',
+      `before the path: wall at (20, -135), the graph in the well's clearing (${ED.graphNear(at)}, ${ED.graphNear(wide)})`);
+
+    // the thin path
+    addShape({ type: 'open', path: [[20, -104], [20, -145]], width: 6 });
+    ok &= say(ED.graphNear(at) === null, 'right after the edit the picture is stale: no answer');
+    await settle();
+    const f = (S.report.findings || []).find(x => x.rule === 'reach.narrow');
+    ok &= say(S.report.ok && f && f.severity === 'warning' && f.parts && f.parts.length === 1 && /widen them to 8 m \(11 m at an angle\)/.test(f.message),
+      'a 6-m path: reach.narrow, a warning with one part: ' + (f ? f.message : rules()));
+    ok &= say(await until(() => ED.graphNear(at) !== null, 10000) && ED.graphNear(at) === 'narrow', 'graph_npc.png reads it as too narrow: ' + ED.graphNear(at));
+    ok &= say(ED.narrowShown() > 100, `the 2-D view shows it red (${ED.narrowShown()} pixels)`);
+    S.show.findings = false;
+    ok &= say(ED.narrowShown() === 0, 'not with Check Findings hidden');
+    S.show.findings = true;
+    const thin = S.doc.terrain.shapes.length - 1;
+
+    // the camp tool over it: a warning, not a refusal
+    ED.camps.arm('ugger');
+    const pl = placement(at, false);
+    ok &= say(!pl.bad && /too narrow; it needs 8 m \(11 m at an angle\)/.test(pl.warn), 'the camp may go there, with a warning: ' + pl.warn);
+    ok &= say(hoverLines(at).some(l => l.bad && /too narrow/.test(l.t)), 'the line beside the mouse says it');
+    ok &= say(place(at) && camps().length === n0 + 1 && S.tool === 'select', 'a click places it');
+    ok &= say(/the check will refuse the map/.test($('log').textContent), 'and the warning is logged');
+    await settle();
+    const npc = (S.report.findings || []).find(x => x.rule === 'reach.npc');
+    ok &= say(!S.report.ok && npc && npc.message.endsWith(`terrain.shapes[${thin}], a path 6 m wide, is too narrow there; it needs 8 m`) && npc.shape === `terrain.shapes[${thin}]`,
+      'the check names the path and its width: ' + (npc ? npc.message : rules()));
+    const npcRow = document.querySelector('#findings .f[data-rule="reach.npc"]');
+    if (npcRow) npcRow.click();
+    ok &= say(S.sel && S.sel.t === 'shape' && S.sel.i === thin && /selects terrain\.shapes/.test(npcRow ? npcRow.textContent : ''), 'its row says so and selects the path to widen');
+    select(null);
+    ok &= say(ED.graphNear(wide) === 'on' && !placement(wide, false).warn, 'in the clearing: on the graph, no warning (a camp added keeps the picture fresh)');
+
+    // the finding's part
+    const row = document.querySelector('#findings .f[data-rule="reach.narrow"]');
+    if (row) row.click();
+    ok &= say(S.sel && S.sel.t === 'part' && S.sel.rule === 'reach.narrow' && /reach\.narrow: part 1 of 1/.test($('inspector').textContent) &&
+      /too narrow for the graphs' squares/.test($('inspector').textContent), 'its row selects the part and explains it');
+
+    // a terrain edit not checked yet: nothing warns
+    addShape({ type: 'wall', circle: [-40, -120], r: 3 });
+    ok &= say(ED.graphNear(wide) === null && !placement(at, false).warn, 'after a terrain edit, until the check: no warning');
+    undo();
+    ok &= say(await until(() => ED.graphNear(at) === 'narrow', 10000), 'its undo: the picture fits again');
+
+    // drawing a path: the measurement's line
+    const keep = { cliff: S.cliff, size: S.brush.size, drawing: S.drawing };
+    S.cliff = 'open';
+    S.drawing = { geom: 'path', pts: [[-65, -65]], mouse: [-45, -65] };
+    const line = w => { S.brush.size = w; return ED.measureText(); };
+    ok &= say(/narrower than 8 m/.test(line(6)), 'drawing a 6-m path: ' + line(6));
+    ok &= say(/not at an angle \(11 m\)/.test(line(9)), '9 m: ' + line(9));
+    ok &= say(!/narrower|angle/.test(line(12)), '12 m: ' + line(12));
+    S.cliff = keep.cliff; S.drawing = keep.drawing; S.brush.size = keep.size;
+
+    // View > Pathing (the NPC graph)
+    const bg0 = S.bg;
+    document.querySelector('#menubar [data-menu="view"]').click();
+    const it = [...document.querySelectorAll('#menuLayer .menu .it')].find(x => x.textContent.includes('Pathing (the NPC graph)'));
+    if (it) it.click();
+    ok &= say(S.bg === 'graph_npc.png', 'View > Pathing (the NPC graph) shows its picture');
+    setBg(bg0 || '');
+
+    while (S.undo.length) undo();
+    await settle();
+    ok &= say(S.report.ok && !(S.report.findings || []).length && camps().length === n0, 'every edit undone: ' + rules());
+    ok &= say(!thrown.length, 'no uncaught error' + (thrown.length ? ': ' + thrown.join('; ') : ''));
+    say(ok, ok ? 'selftest passed' : 'selftest failed');
+    document.title = ok ? 'selftest passed' : 'selftest failed';
+    document.body.dataset.selftest = ok ? 'passed' : 'failed';
+  };
 
   // ?pose7=<name> (CM_Grove, &tab=units): the page left mid-edit for a picture: armed (the ghost and its twin on open
   // ground), team2 (the same with the mouse on team 2's half), refused (the ghost on a wall), selected (a camp's info);
