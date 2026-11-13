@@ -631,7 +631,7 @@ const FB = (() => {
     const all = objects().filter(o => o.kind === 'binding'), me = all.find(o => sameSel(objSel(o), sel));
     if (!me) return [];
     const near = all.filter(o => o !== me && o.lane === me.lane && Math.abs(o.tier - me.tier) === 1).sort((a, b) => a.tier - b.tier);
-    const out = near.map(o => `to ${TIERS[o.tier] || o.tier} ${m1(dist(P, o.pos))} m`);
+    const out = near.map(o => `to ${o.tname || o.tier} ${m1(dist(P, o.pos))} m`);
     let enemy = null;
     for (const o of all) { const d = dist(P, mir(o.pos)); if (!enemy || d < enemy.d) enemy = { d, o }; }
     if (enemy) out.push(`nearest enemy Binding ${m1(enemy.d)} m`);

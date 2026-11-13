@@ -140,7 +140,8 @@ press Del and place a new one.
 the type. The camp's JSON stays under *Advanced* if you'd rather write it by hand, but you never need it.
 
 Below is the list of the map's units: **the base** (the Locus, the Guardian, the shop, the five spawn points, the Cores
-and the Bindings, the game's towers), which can only be moved; the **neutral passive** wells and mines (*+ Well*,
+and the Bindings, the game's towers), which can only be moved (the Bindings come three or two a lane: see *Lanes*);
+the **neutral passive** wells and mines (*+ Well*,
 *+ Mine*), the **neutral hostile** camps and **the bots' ward spots** (*+ Ward spot*). A click selects one and jumps
 there; *Player* filters the list. Cores and Bindings placed automatically are drawn hollow where the editor puts them;
 dragging one makes your own points (*Back to "auto"* in the selection undoes it).
@@ -161,6 +162,13 @@ the chosen lane's knots from team 1's base (a click selects one and jumps there)
 knot*, and the Bindings and the minion spawner on the lane. Moving a knot moves its partner in the other lane, so the
 two lanes stay mirrors. With a lane or a knot selected, the round handle beside the lane sets the width by a drag
 (half metres; whole metres with Shift), between 6 and 80 m.
+
+**Three Bindings a lane or two:** *Bindings* in the tab sets every lane's count. Three are the Outer, Middle and Inner
+Binding (the original map's); two are the Middle and Inner one (as on the original push map). *Two a lane* takes each
+lane's middle one away, the others stay where they are; to take another tier away instead, select one of its Bindings
+and press Del (or *Delete (every lane)* in its info). *Three a lane* adds a Middle one halfway between the two, a few
+metres beside the lane's line as the original map's stand (on the line it would block the minions' way). Team 2's
+Bindings follow as the mirror, and each change is one undo step.
 
 ### The check, on every edit
 

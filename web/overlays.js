@@ -74,7 +74,7 @@ const OV = (() => {
     const out = [];
     for (const o of objects()) {
       if (o.kind === 'binding') {
-        const t = TIERS[o.tier] || o.name.split(' ').pop(), e = mir(o.pos), el = nearestLane(e);
+        const t = o.tname || o.name.split(' ').pop(), e = mir(o.pos), el = nearestLane(e);
         out.push({ key: `own ${o.lane} ${t}`, label: `own ${t} Binding, lane ${o.lane}`, pos: o.pos, kind: 'binding', team: 1 });
         out.push({ key: `enemy ${el} ${t}`, label: `enemy ${t} Binding, lane ${el}`, pos: e, kind: 'binding', team: 2 });
       } else if (o.kind === 'camp' || o.kind === 'well') {
@@ -366,14 +366,16 @@ const OV = (() => {
   // ---- the self-test (?selftest=overlays, CM_Ring then CM_Marsh): the menu's items, the numbers against values
   // computed apart from the page from the same check (the preview, graph_player.png, the document's lanes) by the
   // same rules, the overlays drawn in 2-D and 3-D and following edits, the window, everything off again ----------------
+  // (computed apart from the page; CM_Marsh's centre, enemy Inner and parasite walks again 1.614 m longer since
+  // the Bindings' and Cores' holes in the graphs, mapc StructureRadius, 2026-11-13)
   const EXPECT = {
     CM_Ring: { lanes: { 1: 591.889, 2: 591.889 }, walk: { centre: null, 'enemy 1 Inner': 523.77, 'enemy 1 Middle': 439.277,
       'enemy 1 Outer': 367.2, 'enemy 2 Inner': 523.77, 'enemy 2 Middle': 439.277, 'enemy 2 Outer': 367.2, 'own 1 Inner': 142.898,
       'own 1 Middle': 226.655, 'own 1 Outer': 311.024, 'own 2 Inner': 142.898, 'own 2 Middle': 226.655, 'own 2 Outer': 311.024 } },
-    CM_Marsh: { lanes: { 1: 575.855, 2: 575.855 }, walk: { centre: 266.524, 'enemy 1 Inner': 495.386, 'enemy 1 Middle': 430.589,
-      'enemy 1 Outer': 362.065, 'enemy 2 Inner': 500.333, 'enemy 2 Middle': 430.434, 'enemy 2 Outer': 362.343, 'own 1 Inner': 140.337,
+    CM_Marsh: { lanes: { 1: 575.855, 2: 575.855 }, walk: { centre: 268.138, 'enemy 1 Inner': 497.0, 'enemy 1 Middle': 430.589,
+      'enemy 1 Outer': 362.065, 'enemy 2 Inner': 501.946, 'enemy 2 Middle': 430.434, 'enemy 2 Outer': 362.343, 'own 1 Inner': 140.337,
       'own 1 Middle': 220.344, 'own 1 Outer': 296.103, 'own 2 Inner': 139.822, 'own 2 Middle': 220.183, 'own 2 Outer': 300.338,
-      parasite: 268.646 } },
+      parasite: 270.26 } },
   };
   async function selftest() {
     const out = $('selftest'), lines = [];

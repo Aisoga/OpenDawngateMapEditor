@@ -432,7 +432,7 @@ const FR = (() => {
     if (F.player !== 'neutral') list.append(...cat('The bots\' ward spots', [add('+ Ward spot', 'ward', 'A spot the bots ward: click the map')], o => o.kind === 'ward'));
     unitsBody.parentNode.classList.toggle('armed', TOOL_TAB[S.tool] === 'units');
     unitsBody.append(h('div', { class: 'row' }, h('span', { class: 'small' }, 'Player'), player), list,
-      h('div', { class: 'note' }, 'Click one to select it and jump there; drag it on the map. Del deletes a camp. The base is moved, never added or deleted; team 2\'s is the mirror.'));
+      h('div', { class: 'note' }, 'Click one to select it and jump there; drag it on the map. Del deletes a camp. The base is moved, never added or deleted (but the Bindings are three or two a lane: Lanes > Bindings); team 2\'s is the mirror.'));
   }
 
   const lanesBody = ED.addPane('lanes', 'Lanes', 10);
@@ -473,8 +473,13 @@ const FR = (() => {
     const countNote = h('div', { class: 'note' }, L.length === 1
       ? 'One lane runs through the centre and is its own mirror walked back. Two lanes: lane 2 starts as its mirror, on the same path; drag lane 1\'s knots to part them.'
       : 'One lane keeps lane 1\'s base exit and runs it through the centre (its corridor follows); lane 2 and its corridor go, and Bindings you placed go back to "auto" (you are asked first).');
-    lanesBody.append(count, countNote, pick, width, h('div', { class: 'note' }, 'Drag a knot on the map; its partner in the other lane follows, so the lanes stay mirrors.'),
-      kl, onLane, h('div', { class: 'note' }, 'The Bindings stand where the editor puts them ("auto") until you drag one; then they are yours (Back to "auto" in the selection\'s info).'));
+    const nb = bindingCount();
+    const bcount = h('div', { class: 'row' }, h('span', { class: 'small' }, 'Bindings'),
+      h('button', { class: nb === 3 ? 'on' : '', 'data-bindings': 3, title: 'Three a lane: Outer, Middle, Inner (SM_Map_v5\'s). From two, a Middle one comes halfway between them', onclick: () => setBindingCount(3) }, 'Three a lane'),
+      h('button', { class: nb === 2 ? 'on' : '', 'data-bindings': 2, title: 'Two a lane: Middle, Inner (MM_Map_v3\'s). The middle one goes; the others keep their places', onclick: () => setBindingCount(2) }, 'Two a lane'));
+    lanesBody.append(count, countNote, bcount, pick, width, h('div', { class: 'note' }, 'Drag a knot on the map; its partner in the other lane follows, so the lanes stay mirrors.'),
+      kl, onLane, h('div', { class: 'note' }, 'The Bindings stand where the editor puts them ("auto") until you drag one; then they are yours (Back to "auto" in the selection\'s info). ' +
+        'Two a lane drops each lane\'s middle one; to drop another, select it and press Del.'));
   }
 
   function renderPalettes() {

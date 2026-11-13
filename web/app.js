@@ -145,6 +145,9 @@ const TYPE = {
   bush: ['rgba(60,170,70,0.60)', '#6fe07a'],
 };
 const TIERS = ['Outer', 'Middle', 'Inner'];
+// tierNames are the names of a lane's n Bindings from the own base's far side, as the compiler gives them (mapc
+// TierNames): three are Outer, Middle and Inner, two are Middle and Inner (MM_Map_v3's tiers)
+function tierNames(n) { return n === 2 ? TIERS.slice(1) : TIERS; }
 const LANE_MIN = 6, LANE_MAX = 80; // the check's lanes.width (mapc MinLaneWidth, MaxLaneWidth)
 // setLaneWidth sets both lanes' width (the Lanes tab's and the inspector's field) as one undo step; a width the check
 // refuses (lanes.width) is refused here (EDUX6), the field shows the width again
@@ -386,12 +389,15 @@ function objects() {
   else pv.filter(o => o.kind === 'core').forEach((o, i) => add('core', o.name, o.pos, null, { auto: 'cores', idx: i }));
   if (b.bindings && typeof b.bindings === 'object') {
     for (const id of Object.keys(b.bindings)) {
-      (Array.isArray(b.bindings[id]) ? b.bindings[id] : []).forEach((p, t) => add('binding', 'lane ' + id + ' ' + (TIERS[t] || t), p,
-        ['base', 'bindings', id, t], { lane: +id, tier: t }));
+      const list = Array.isArray(b.bindings[id]) ? b.bindings[id] : [], names = tierNames(list.length);
+      list.forEach((p, t) => add('binding', 'lane ' + id + ' ' + (names[t] || t), p,
+        ['base', 'bindings', id, t], { lane: +id, tier: t, tname: names[t] }));
     }
   } else {
-    pv.filter(o => o.kind === 'binding').forEach(o => add('binding', o.name, o.pos, null,
-      { auto: 'bindings', lane: o.lane, tier: TIERS.indexOf(o.name.split(' ').pop()) }));
+    pv.filter(o => o.kind === 'binding').forEach(o => {
+      const tn = o.name.split(' ').pop();
+      add('binding', o.name, o.pos, null, { auto: 'bindings', lane: o.lane, tier: TIERS.indexOf(tn), tname: tn });
+    });
   }
   (Array.isArray(d.wells) ? d.wells : []).forEach((w, i) => w && add('well', w.kind === 'mine' ? 'mine' : 'well', w.pos, ['wells', i, 'pos']));
   // a camp: its name stays kind + noun (the overlays and the 3-D view's keys read it), label and color are what people see
@@ -418,6 +424,92 @@ function materialize(which) {
   }
   if (!Object.keys(bind).length) return false;
   S.doc.base.bindings = bind;
+  return true;
+}
+
+// ---- the Bindings a lane: three (Outer, Middle, Inner) or two (Middle, Inner), every lane the same (mapc
+// fixed.bindings); "auto" places three
+function bindingsPlaced() { const b = S.doc.base || {}; return !!b.bindings && typeof b.bindings === 'object'; }
+function bindingCount() {
+  if (!bindingsPlaced()) return 3;
+  const ls = Object.values(S.doc.base.bindings).filter(Array.isArray);
+  return ls.length ? ls[0].length : 3;
+}
+// canPlaceBindings: "auto" ones become points from the last check's preview (materialize), so there must be one
+function canPlaceBindings() {
+  if (bindingsPlaced() || (S.preview && S.preview.objects.some(o => o.team === 1 && o.kind === 'binding'))) return true;
+  log('the Bindings\' places come from the check: wait for it to pass once', 'err');
+  return false;
+}
+// MIDDLE_BESIDE is how far SM_Map_v5's Middle Binding stands beside its lane's line, to the left of lane 1's way
+// (mapc smBindingLateral, as "auto" places it; lane 2's the other side): a Binding's footprint is off the graphs
+// (mapc StructureRadius), so one on the line would cut the minions' leg (lanes.graph)
+const MIDDLE_BESIDE = -7.1;
+// middleBetween is where a new Middle Binding goes: lane id's route halfway along it between where a and c lie on it,
+// MIDDLE_BESIDE beside it, so it stands in its lane, off the minions' line and between the two in tier order (the
+// straight midpoint without the lane)
+function middleBetween(id, a, c) {
+  const l = laneById(id), ks = l && Array.isArray(l.knots) ? l.knots.filter(isPt) : [];
+  if (ks.length < 2) return [r1((a[0] + c[0]) / 2), r1((a[1] + c[1]) / 2)];
+  const lat = id === 1 ? MIDDLE_BESIDE : -MIDDLE_BESIDE;
+  const along = p => { // the arc length of the route's point nearest p
+    let best = Infinity, s = 0, acc = 0;
+    for (let i = 1; i < ks.length; i++) {
+      const u = ks[i - 1], v = ks[i], vx = v[0] - u[0], vy = v[1] - u[1], L = Math.hypot(vx, vy);
+      const t = L ? Math.max(0, Math.min(1, ((p[0] - u[0]) * vx + (p[1] - u[1]) * vy) / (L * L))) : 0;
+      const d = Math.hypot(u[0] + t * vx - p[0], u[1] + t * vy - p[1]);
+      if (d < best) { best = d; s = acc + t * L; }
+      acc += L;
+    }
+    return s;
+  };
+  let s = (along(a) + along(c)) / 2;
+  for (let i = 1; i < ks.length; i++) {
+    const u = ks[i - 1], v = ks[i], L = Math.hypot(v[0] - u[0], v[1] - u[1]);
+    if (s <= L || i === ks.length - 1) {
+      const t = L ? Math.min(1, s / L) : 0, dx = L ? (v[0] - u[0]) / L : 1, dy = L ? (v[1] - u[1]) / L : 0;
+      return [r1(u[0] + t * (v[0] - u[0]) - dy * lat), r1(u[1] + t * (v[1] - u[1]) + dx * lat)];
+    }
+    s -= L;
+  }
+  return [r1(ks[0][0]), r1(ks[0][1])];
+}
+// setBindingCount makes every lane's Bindings n (one undo step; team 2's are the mirror): from three to two the middle
+// one goes and the others keep their places (named Middle and Inner then); from two to three a Middle one comes halfway
+// between them, beside the lane's line (middleBetween)
+function setBindingCount(n) {
+  if (!S.doc || (n !== 2 && n !== 3) || bindingCount() === n || !canPlaceBindings()) return false;
+  const auto = !bindingsPlaced();
+  edit(d => {
+    if (auto) materialize('bindings');
+    for (const [id, ls] of Object.entries(d.base.bindings)) {
+      if (!Array.isArray(ls)) continue;
+      if (n === 2 && ls.length === 3) ls.splice(1, 1);
+      else if (n === 3 && ls.length === 2 && isPt(ls[0]) && isPt(ls[1])) ls.splice(1, 0, middleBetween(+id, ls[0], ls[1]));
+    }
+  });
+  select(null);
+  log(n === 2 ? 'two Bindings a lane: the middle one went, the others are Middle and Inner' : 'three Bindings a lane: a Middle one halfway between the two, beside the lane', 'ok');
+  return true;
+}
+// bindingTier is the selected Binding's tier (its place in the lane's list), -1 when the selection is no Binding
+function bindingTier(sel) {
+  if (!sel) return -1;
+  if (sel.t === 'obj' && sel.path[0] === 'base' && sel.path[1] === 'bindings' && typeof sel.path[3] === 'number') return sel.path[3];
+  if (sel.t === 'auto' && sel.which === 'bindings' && sel.tier >= 0) return sel.tier;
+  return -1;
+}
+// deleteBindingTier takes tier t off every lane (three a lane to two; team 2's go with them): two is the fewest
+function deleteBindingTier(t) {
+  if (bindingCount() !== 3) { log('two Bindings a lane are the fewest (Middle and Inner): Lanes > Bindings sets three again', 'err'); return false; }
+  if (!(t >= 0 && t < 3) || !canPlaceBindings()) return false;
+  const auto = !bindingsPlaced();
+  edit(d => {
+    if (auto) materialize('bindings');
+    for (const ls of Object.values(d.base.bindings)) if (Array.isArray(ls) && ls.length === 3) ls.splice(t, 1);
+  });
+  select(null);
+  log(`the ${TIERS[t]} Binding went from every lane: the other two are Middle and Inner`, 'ok');
   return true;
 }
 
@@ -685,7 +777,7 @@ function drawSymbol(o, team, sel) {
     ctx.stroke();
   }
   const label = { locus: 'L', guardian: 'G', shop: '$', spawn: o.name.slice(-1), core: o.name.slice(-1),
-    binding: o.tier >= 0 ? 'OMI'[o.tier] : 'B', well: 'W', camp: o.once ? 'P' : 'C', spawner: 'm', prop: '', ward: 'w' }[o.kind] || '?';
+    binding: o.tname ? o.tname[0] : 'B', well: 'W', camp: o.once ? 'P' : 'C', spawner: 'm', prop: '', ward: 'w' }[o.kind] || '?';
   ctx.globalAlpha = 1;
   ctx.fillStyle = o.auto || o.kind === 'spawner' ? TEAM[team - 1] : '#0b0d10';
   ctx.font = `bold ${9 * dpr}px Segoe UI, sans-serif`;
@@ -1829,7 +1921,8 @@ function updateHint() {
   $('toolHint').textContent = `${how}. Draws ${what}; team 2 gets the mirror. Esc ends.`;
 }
 
-// deleteSel removes the selection where the format allows it: the fixed set can only be moved.
+// deleteSel removes the selection where the format allows it: the fixed set can only be moved, but a Binding's tier
+// goes from every lane (three a lane to two).
 function deleteSel() {
   const s = S.sel;
   if (!s) return;
@@ -1852,7 +1945,8 @@ function deleteSel() {
     if (s.path[0] === 'camps' && ED.camps) ED.camps.deleted();
     return;
   }
-  log('the fixed set (Locus, Guardian, shop, spawns, Cores, Bindings) is moved, never deleted', 'err');
+  if (bindingTier(s) >= 0) return deleteBindingTier(bindingTier(s)); // three a lane to two
+  log('the fixed set (Locus, Guardian, shop, spawns, Cores) is moved, never deleted', 'err');
 }
 
 // ---- the inspector ----------------------------------------------------------------------------------------
@@ -1999,11 +2093,13 @@ function inspectorBody(el) {
       el.append(h('div', { class: 'btns' }, h('button', { onclick: () => { edit(d => { d.base[s.path[1]] = 'auto'; }); select(null); } },
         'Back to "auto" (all ' + s.path[1] + ')')));
     }
+    if (bindingTier(s) >= 0) el.append(bindingCountInfo(s));
     return;
   }
   if (s.t === 'auto') {
     el.append(h('div', { class: 'path' }, 'base.' + s.which + ' = "auto"'),
       h('p', {}, 'Placed by the compiler from the lanes and the Guardian. Drag one to place them all by hand (they become explicit points).'));
+    if (bindingTier(s) >= 0) el.append(bindingCountInfo(s));
     return;
   }
   if (s.t === 'knot' || s.t === 'lane' || s.t === 'lwidth') {
@@ -2055,6 +2151,17 @@ function inspectorBody(el) {
       h('button', { onclick: move(1), title: 'Drawn later (over)' }, 'Down')),
     h('p', { class: 'small' }, 'Shapes are drawn in order over the ground everywhere else (Map > Options); a later one wins where they overlap.')),
     jsonEditor(sh, v => { S.doc.terrain.shapes[i] = v; }));
+}
+
+// bindingCountInfo: a selected Binding's Delete (its tier off every lane, three to two) and the count it belongs to
+function bindingCountInfo(sel) {
+  const n = bindingCount(), t = bindingTier(sel);
+  return h('div', { 'data-binding-count': n },
+    n === 3 ? h('div', { class: 'btns' }, h('button', { title: 'Takes this tier off every lane (team 2\'s with it); the other two become Middle and Inner',
+      onclick: () => deleteBindingTier(t) }, 'Delete (every lane)')) : null,
+    h('p', { class: 'small' }, n === 3
+      ? 'Three Bindings a lane (Outer, Middle, Inner). Delete takes this one\'s tier off every lane, leaving two (Middle, Inner).'
+      : 'Two Bindings a lane (Middle, Inner, as MM_Map_v3). Lanes > Bindings: Three adds a Middle one halfway between them.'));
 }
 
 // joinedNote says what a drag of the knot, well or camp takes along (outlined on the map)
@@ -2770,6 +2877,101 @@ ED.selftests.edit6 = async function selftestEdit6() {
     select(null);
     ok &= say(snapshot() === S.savedJSON, 'undone: CM_Marsh as saved');
   }
+  say(ok, ok ? 'selftest passed' : 'selftest failed');
+  document.title = ok ? 'selftest passed' : 'selftest failed';
+  document.body.dataset.selftest = ok ? 'passed' : 'failed';
+};
+
+// ---- EDBIND's self-test (?selftest=bindings, CM_Ring): Lanes > Bindings three or two a lane, a Binding's Delete (its
+// tier off every lane, from "auto" too), two the fewest, the tiers' names as the compiler's preview gives them
+ED.selftests.bindings = async function selftestBindings() {
+  const out = $('selftest'), lines = [];
+  out.classList.remove('hidden');
+  const say = (ok, msg) => { lines.push((ok ? 'PASS ' : 'FAIL ') + msg); out.textContent = lines.join('\n'); return !!ok; };
+  const settle = async () => { clearTimeout(S.checkTimer); await runCheck(); };
+  const rules = () => (S.report.findings || []).map(f => f.rule + '@' + (f.path || '')).join(' ');
+  const lane = id => objects().filter(o => o.kind === 'binding' && o.lane === id).sort((a, b) => a.tier - b.tier);
+  const names = id => lane(id).map(o => o.name.split(' ').pop()).join(',');
+  const glyphs = id => lane(id).map(o => o.tname ? o.tname[0] : 'B').join('');
+  const pvNames = id => S.preview.objects.filter(o => o.team === 1 && o.kind === 'binding' && o.lane === id).map(o => o.name.split(' ').pop()).join(',');
+  const same = (p, q) => isPt(p) && isPt(q) && Math.abs(p[0] - q[0]) < 0.11 && Math.abs(p[1] - q[1]) < 0.11;
+  const counts = () => Object.values(S.doc.base.bindings).map(l => l.length).join(',');
+  const named = (want, what) => {
+    const ok = names(1) === want && names(2) === want && pvNames(1) === want && pvNames(2) === want;
+    return say(ok, `${what}: the page names lane 1 ${names(1)}, lane 2 ${names(2)} (${glyphs(1)}); the compiler's preview ${pvNames(1)} / ${pvNames(2)}`);
+  };
+  const lanesBtn = n => document.querySelector(`#tab_lanes [data-bindings="${n}"]`);
+  let ok = true;
+  await settle();
+  ok &= say(S.report && S.report.ok && !bindingsPlaced() && bindingCount() === 3, `opened ${S.pkg}: Bindings "auto", three a lane; check ${S.report.ok ? 'passes' : rules()}`);
+  ok &= named('Outer,Middle,Inner', 'auto');
+  const auto = { 1: lane(1).map(o => o.pos.slice()), 2: lane(2).map(o => o.pos.slice()) };
+  // Lanes > Bindings: Two a lane, from "auto": the middle one goes, the others keep their places
+  ED.setTab('lanes');
+  ok &= say(lanesBtn(3) && lanesBtn(2) && lanesBtn(3).classList.contains('on') && !lanesBtn(2).classList.contains('on'), 'the Lanes tab has Bindings: Three a lane (on), Two a lane');
+  const u0 = S.undo.length;
+  if (lanesBtn(2)) lanesBtn(2).click();
+  await settle();
+  ok &= say(bindingsPlaced() && counts() === '2,2' && S.undo.length === u0 + 1, `Two a lane: ${counts()} placed, one undo step`);
+  ok &= say([1, 2].every(id => same(lane(id)[0].pos, auto[id][0]) && same(lane(id)[1].pos, auto[id][2])), 'the Outer and Inner places stay: ' + JSON.stringify(S.doc.base.bindings));
+  ok &= say(S.report.ok, 'the check passes: ' + (S.report.ok ? 'yes' : rules()));
+  ok &= named('Middle,Inner', 'two a lane') && say(glyphs(1) === 'MI', 'drawn as M and I: ' + glyphs(1));
+  ok &= say(lanesBtn(2) && lanesBtn(2).classList.contains('on'), 'Two a lane is on');
+  const onLane = $('tab_lanes').textContent;
+  ok &= say(/lane 1 Middle/.test(onLane) && /lane 1 Inner/.test(onLane) && !/lane 1 Outer/.test(onLane), 'the Lanes tab lists lane 1 Middle and Inner');
+  // two are the fewest: a Delete is refused, the info has no Delete button
+  select(objSel(lane(1)[0]));
+  ok &= say(!!$('inspector').querySelector('[data-binding-count="2"]') && ![...$('inspector').querySelectorAll('button')].some(b => /every lane/.test(b.textContent)),
+    'a selected one of two: its info says two a lane, no Delete');
+  const j2 = snapshot();
+  deleteSel();
+  ok &= say(snapshot() === j2 && S.undo.length === u0 + 1, 'Delete refused at two a lane: ' + counts());
+  // Three a lane: a Middle one comes halfway between them, 7.1 m beside the lane's line (SM's Middle)
+  if (lanesBtn(3)) lanesBtn(3).click();
+  await settle();
+  ok &= say(counts() === '3,3', 'Three a lane: ' + counts());
+  for (const id of [1, 2]) {
+    const [a, m, c] = lane(id).map(o => o.pos), ks = laneById(id).knots;
+    let dl = Infinity;
+    for (let i = 1; i < ks.length; i++) {
+      const u = ks[i - 1], v = ks[i], vx = v[0] - u[0], vy = v[1] - u[1], L = vx * vx + vy * vy;
+      const t = L ? Math.max(0, Math.min(1, ((m[0] - u[0]) * vx + (m[1] - u[1]) * vy) / L)) : 0;
+      dl = Math.min(dl, Math.hypot(u[0] + t * vx - m[0], u[1] + t * vy - m[1]));
+    }
+    const dac = Math.hypot(a[0] - c[0], a[1] - c[1]);
+    ok &= say(same(a, auto[id][0]) && same(c, auto[id][2]) && Math.abs(dl - 7.1) < 0.2 && Math.hypot(m[0] - a[0], m[1] - a[1]) < dac && Math.hypot(m[0] - c[0], m[1] - c[1]) < dac,
+      `lane ${id}'s new Middle ${JSON.stringify(m)}: ${dl.toFixed(2)} m beside the lane's line (7.1), between the two`);
+  }
+  ok &= say(S.report.ok, 'the check passes: ' + (S.report.ok ? 'yes' : rules()));
+  ok &= named('Outer,Middle,Inner', 'three a lane');
+  // a selected Binding's Delete: its tier off every lane (the inspector's button and the Del key both go through deleteSel)
+  const three = { 1: lane(1).map(o => o.pos.slice()), 2: lane(2).map(o => o.pos.slice()) };
+  select(objSel(lane(2)[0]));
+  const del = [...$('inspector').querySelectorAll('button')].find(b => /every lane/.test(b.textContent));
+  ok &= say(!!del && !!$('inspector').querySelector('[data-binding-count="3"]'), 'a selected one of three: its info has Delete (every lane)');
+  if (del) del.click();
+  await settle();
+  ok &= say(counts() === '2,2' && [1, 2].every(id => same(lane(id)[0].pos, three[id][1]) && same(lane(id)[1].pos, three[id][2])) && !S.sel,
+    'lane 2\'s Outer deleted: every lane keeps its Middle and Inner places, ' + counts());
+  ok &= say(S.report.ok, 'the check passes: ' + (S.report.ok ? 'yes' : rules()));
+  ok &= named('Middle,Inner', 'after the Delete');
+  undo();
+  await settle();
+  ok &= say(counts() === '3,3', 'undo: three a lane again');
+  // from "auto": Del on the auto Middle one places them all and takes the Middle tier off
+  edit(d => { d.base.bindings = 'auto'; });
+  await settle();
+  const am = lane(1).find(o => o.tname === 'Middle');
+  select(objSel(am));
+  ok &= say(S.sel && S.sel.t === 'auto' && !!$('inspector').querySelector('[data-binding-count="3"]'), 'an "auto" Binding selected: its info has the count');
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+  await settle();
+  ok &= say(bindingsPlaced() && counts() === '2,2' && [1, 2].every(id => same(lane(id)[0].pos, auto[id][0]) && same(lane(id)[1].pos, auto[id][2])),
+    'Del on the "auto" Middle: placed, two a lane at the Outer and Inner places');
+  ok &= say(S.report.ok, 'the check passes: ' + (S.report.ok ? 'yes' : rules()));
+  while (S.undo.length > u0) undo();
+  await settle();
+  ok &= say(snapshot() === S.savedJSON, 'undone: ' + S.pkg + ' as saved');
   say(ok, ok ? 'selftest passed' : 'selftest failed');
   document.title = ok ? 'selftest passed' : 'selftest failed';
   document.body.dataset.selftest = ok ? 'passed' : 'failed';
