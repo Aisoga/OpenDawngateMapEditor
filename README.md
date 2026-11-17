@@ -44,6 +44,9 @@ open the address again to come back.
    - a **tag** (lower-case letters and digits, for example `lagoon`): what a custom game's name uses to pick the map;
    - a **prefix** for the game browser (for example `[Lagoon] `).
 
+   An empty display name, tag or prefix keeps the template's. If a name can't be used (too long, a tag another map
+   already has, a name the game's own maps use), *Create* writes nothing and says under that field what to change.
+
    The templates:
    - **CM_Ring** (*Test Ring*): two lanes round a ring, one well a side, a few bushes: the smallest complete map;
    - **CM_Grove** (*Test Grove*): two lanes with jungle camps, the buff camps and the parasite, bushes and the bots'
@@ -298,6 +301,42 @@ drawn where its mask is.
   every layer. Tools > Paint into the Picture paints a picture instead of strokes.
 - After each change the ground is baked again (a few seconds) and shown under the 2-D view (View > Ground Texture)
   and in 3-D. Map > Ground Bake and Cliff sets the bake's size and the cliffs' material.
+
+### Map rules: how a match on your map is played
+
+**Map > Rules...** (also the *Rules* line in the left panel with nothing selected) sets your map's own rules, top to
+bottom:
+- **Based on:** *Dawngate pace* (the main map's balance) or *Anshavar Pass pace* (quicker respawns). Every value
+  below starts from it.
+- **Start from a preset:** one click sets every rule of the card, and Undo takes it back in one step. *Classic*
+  (the game's own rules), *Brawl* (level 6, 1,500 gold, quick respawns, first to 25 kills or the most after 20
+  minutes, no surrender), *Kill Race* (first to 20 kills, or the most after 25 minutes), *Sudden Death 15* (15 minutes, then the team with more kills wins), *Gold Rush*, *Siege*
+  (Bindings come back after 4 minutes), *Late Game Now* (level 10 and 4,000 gold). The card that matches is lit; after
+  a change it reads *Custom (from Brawl)*.
+- **What players will read:** the text players see in the lobby and in the chat at the start of the match, and
+  *Unrated* when the map changes how a match is won (a kill race, a Binding race or a time limit makes the game
+  unrated; the other rules stay rated).
+- **The fields:** How to win: destroying the enemy Guardian always wins, and you can tick more ways to win, whichever
+  comes first ends the match: a *Kill race* (the first team to so many kills), a *Binding race* (the first team to
+  destroy so many enemy Bindings; the field shows how many Bindings each team has on your map, and a destroyed Binding
+  that comes back counts again) and a *Time limit* (then the team with more kills wins, with a Binding race the team
+  that destroyed more Bindings, then more kills; a tie goes to sudden death). Players (the starting level for everyone, bots too; the respawn
+  time; the levelling speed), Economy, Minions, Bindings (coming back after a time), Wells and Surrender. Each field
+  has its unit and shows the game's value in grey: leave it empty to keep that value. Under each group a line shows
+  what it means in a match ("level 1 at 0:00: 15.5 s · level 10 at 20:00: 45 s", "29 waves by 15:00", "about 1,400
+  gold by 10:00 without kills").
+- **Lobby setup (suggested):** the rules a custom game on your map starts its lobby with (the lobby's creator can
+  still change them): *None* (the server decides, usually Standard), *Standard*, *Draft*, *Custom...* (a choice for
+  each of the lobby's categories: shaper pick, shaper pool, shop access, item pool and win condition) or *A server's
+  preset...* (the id of a preset a server defines; servers without it start the lobby as usual). On a map with its
+  own way to win the Win condition stays *Guardian only*. It isn't part of the map's files: changing it needs no new
+  build by the players.
+- A value the check refuses shows in red at its field (a Binding race to more Bindings than the enemy has, when
+  they don't come back); a warning (a kill race under 5 kills, waves closer than 15 s) in yellow.
+
+**Advanced > Gameplay Constants...** lists the values the rules change, the game's and your map's, the changed ones in
+bold. **Help > Making Maps** has a *Try it* button: it sets a kill race of 3 and starts Test, which shows a match's end
+quickly. `docs/making-maps.md` lists every member and its range.
 
 ### The void: what lies past the ground
 

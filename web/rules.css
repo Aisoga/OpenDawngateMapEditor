@@ -1,0 +1,38 @@
+/* Map > Rules... and Advanced > Gameplay Constants... (rules.js) */
+#win_rules { width: 470px; }
+#win_constants { width: 560px; }
+#paneRules .rgrp { border-top: 1px solid var(--line); padding: 6px 0 4px; }
+#paneRules .rgrp:first-child { border-top: 0; padding-top: 0; }
+#paneRules .rgh { font-weight: 600; margin-bottom: 4px; }
+#paneRules .rseg { display: inline-flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; margin: 0 0 4px; }
+#paneRules .rseg button { border: 0; border-radius: 0; border-right: 1px solid var(--line); }
+#paneRules .rseg button:last-child { border-right: 0; }
+#paneRules .rcards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+#paneRules .rcard { display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 4px 6px; font-size: 11px;
+  line-height: 1.25; color: var(--dim); border: 1px solid var(--line); border-radius: 4px; background: #2a2f38; }
+#paneRules .rcard b { font-size: 12px; color: var(--text); }
+#paneRules .rcard.on { background: var(--on); border-color: var(--accent); color: #c8d8ee; }
+#paneRules .rcard.custom { grid-column: 1 / -1; cursor: default; }
+#paneRules .rread { border: 1px solid var(--line); background: var(--panel2); padding: 6px 8px; border-radius: 4px; }
+#paneRules .rread p { margin: 2px 0; }
+#paneRules .rtags { display: flex; gap: 6px; align-items: center; }
+#paneRules .rshort { font-weight: 600; color: var(--accent); }
+#paneRules .rfield { margin: 2px 0 2px 4px; }
+#paneRules .rfield .hint { margin: 0 0 2px 170px; }
+#paneRules label.rl { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+#paneRules .rlab { width: 164px; flex: none; }
+#paneRules .rin { display: inline-flex; align-items: center; gap: 4px; }
+#paneRules .runit { color: var(--dim); min-width: 40px; }
+#paneRules .rdef { color: var(--dim); font-size: 11px; }
+#paneRules input::placeholder { color: #67707d; }
+#paneRules label.rcheck { display: flex; align-items: center; gap: 4px; margin: 2px 0 2px 4px; }
+#paneRules .rprev { margin: 4px 0 2px 4px; padding: 3px 6px; border-left: 3px solid var(--accent); background: #1b2230;
+  font-size: 12px; color: #c8d0dc; }
+#paneRules .vf, #paneRules .vfind .vf { font-size: 11px; padding: 2px 6px; margin: 2px 0 2px 4px; border-left: 3px solid var(--err);
+  background: #22262e; }
+#paneRules .vf.warning { border-left-color: var(--warn); }
+#paneConstants table.rct { border-collapse: collapse; width: 100%; font-size: 12px; }
+#paneConstants .rct th, #paneConstants .rct td { text-align: left; padding: 2px 6px; border-bottom: 1px solid var(--line); }
+#paneConstants .rct td:nth-child(3), #paneConstants .rct td:nth-child(4) { text-align: right; }
+#paneConstants .rct tr.chg td { color: #fff; }
+#helpBody .trybox { border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; margin: 6px 0; }

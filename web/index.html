@@ -5,6 +5,7 @@
 <title>Map editor</title>
 <link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="ground.css">
+<link rel="stylesheet" href="rules.css">
 </head>
 <body>
 <!-- The frame (frame.js): the menu bar, the toolbar, the minimap with the selection below it, one main view (2-D or
@@ -86,9 +87,14 @@
     <h2>New map from a template</h2>
     <label>Template <select name="template" id="newTemplate"></select></label>
     <label>Name (CM_Word: the Level's and the folder's) <input name="name" required pattern="[A-Za-z0-9_]{1,80}" value="CM_"></label>
+    <div class="vf hidden" data-err="name"></div>
     <label>Display name (1-13 characters) <input name="display" maxlength="13"></label>
+    <div class="vf hidden" data-err="display"></div>
     <label>Tag (a-z, 0-9: the custom game's ~#tag) <input name="tag" pattern="[a-z0-9]+"></label>
+    <div class="vf hidden" data-err="tag"></div>
     <label>Prefix (at most 16) <input name="prefix" maxlength="16"></label>
+    <div class="vf hidden" data-err="prefix"></div>
+    <div class="vf hidden" data-err=""></div>
     <menu><button value="cancel" formnovalidate>Cancel</button> <button value="ok" id="newOk">Create</button></menu>
   </form>
 </dialog>
@@ -107,5 +113,6 @@
 <script src="heights.js"></script>
 <script src="feedback.js"></script>
 <script src="camps.js"></script>
+<script src="rules.js"></script>
 </body>
 </html>

@@ -61,7 +61,8 @@ passes unnoticed.
 | `size` | the side of the map's square, in metres | more than 0, at most 600; every authored point at least 2 m inside the edge |
 | `symmetry` | how team 2's half is made | `"point"` |
 | `environment` | whose light, atmosphere and music the map has | `"SM_Map_v5"` or `"MM_Map_v3"` |
-| `tuning` | whose gameplay tuning, items and settings the map uses | `"SM_Map_v5"` or `"MM_Map_v3"` |
+| `tuning` | whose gameplay tuning, items and settings the map uses (the editor's Map > Rules... calls it *Dawngate pace* and *Anshavar Pass pace*) | `"SM_Map_v5"` or `"MM_Map_v3"` |
+| `rules` (optional) | the map's own match rules: how a match is won, the starting level, respawn, minions, gold, XP, Bindings that come back, wells, surrender | below |
 | `lanes` | one or two lanes: `{"id": 1 (Top) or 2 (Bottom), "width": m, "knots": [[x, y], ...]}`, in team 1's direction from its base | ids once each; width 6-80 m; 2-16 knots, none within 1 m of the one before; lane 2 is lane 1 mirrored and walked back, with the same width |
 | `base` | team 1's base: `locus`, `guardian`, `shop` (the shop's reach is measured from it), `spawns` (5 points), `cores` and `bindings` | below |
 | `wells` | team 1's spirit wells or gold mines: `[{"kind": "well" or "mine", "pos": [x, y]}]`, each mirrored | 1-8 on the map (so 1-4 authored) |
@@ -150,6 +151,49 @@ from each other and from their mirrors.
 **The void** (`void`; every member optional): `cut` (the ground ends this many metres past the walkable edge),
 `backdrop` (`z`, `texture`, `scale`, `unlit`: the plane under the level), `mist` (`z`, `range`, `color`: a
 see-through layer that tints what lies under it), `fog` (`start`, `end`, `color`: the map's own height fog).
+
+**The rules** (`rules`; every member optional; a member left out keeps the value of the map's `tuning`; the editor's
+Map > Rules... writes them for you, with presets such as Brawl, Kill Race and Gold Rush):
+
+```json
+"rules": {
+  "victory":    { "kills": 20, "minutes": 25, "bindings": 3 },
+  "startLevel": 6,
+  "respawn":    { "base": 8, "perLevel": 0.5, "perMinute": 0.5 },
+  "minions":    { "firstWave": 30, "every": 25 },
+  "gold":       { "start": 1500, "perMinute": 200, "from": 30, "kills": 1.5 },
+  "xp":         { "speed": 1.5 },
+  "bindings":   { "respawn": 300 },
+  "wells":      { "opensAt": 300, "relock": 120, "gold": 1.5 },
+  "surrender":  { "after": 10, "allowed": true },
+  "lobbyPreset": "pick=random,victory=bind1"
+}
+```
+
+- `victory`: `kills`, a kill race (the first team to that many kills wins); `bindings`, a Binding race (the first
+  team to destroy that many enemy Bindings wins; a Binding that came back counts again); `minutes`, a time limit (then
+  the team with more kills wins, with a Binding race the team that destroyed more Bindings, then more kills; a tie
+  goes to sudden death, the next kill, or Binding, wins). They add up: whichever is met first ends the match, and the
+  Guardian still wins at any time. Any of them makes the game unrated. Not to be confused with `bindings.respawn`
+  below, which brings destroyed Bindings back.
+- `startLevel`: everyone, bots too, starts at this level.
+- `respawn`: the death timer in seconds, `base` + `perLevel` × the level + `perMinute` × the match's minutes.
+- `minions`: the first wave at `firstWave` seconds, then one every `every` seconds.
+- `gold`: `start` (starting gold), `perMinute` (passive gold a minute) from `from` seconds on, `kills` (a factor on the
+  gold for kills, streaks and first blood).
+- `xp`: `speed`, a factor on how fast champions level.
+- `bindings`: `respawn`, a destroyed Binding comes back this many seconds after it fell.
+- `wells`: closed until `opensAt` seconds, closed for `relock` seconds after a capture, `gold` a factor on their gold.
+- `surrender`: a vote unlocks by time at `after` minutes; `allowed: false` allows it only when a player is gone.
+- `lobbyPreset`: the lobby setup the map suggests: a custom game on the map starts its lobby with it, and the lobby's
+  creator can still change it. A preset's id (`standard`, `draft`, `aram`, `allRandom`, or one a server defines: a
+  server without it starts the lobby as usual, and the check warns) or the lobby's rules as `category=option` pairs
+  separated by commas (`pick`, `shaperPool`, `shop`, `itemPool`, `victory`; for example
+  `pick=random,shop=onDeath,victory=bind1`). A map with its own `victory` can't suggest one (an error). Not built
+  into the map's files.
+
+Times are seconds except `victory.minutes` and `surrender.after` (minutes). Players read the rules in the lobby and in
+the chat at the start of the match, in the words the editor's *What players will read* shows.
 
 **The graph** (`graph`): the walking graphs are made of squares; a smaller square (`"cell": 2`) brings the walkable
 ground nearer the walls. Without it the compiler picks the smallest square that keeps both graphs under 7,000 areas.
@@ -243,6 +287,21 @@ These run first; the layout rules run only when they pass.
 | `scatter.decor` (warning) | a fill on walkable ground without `blocks` has no plant among its nouns, so it places nothing | add a plant, tick *Block*, or fill other ground |
 | `scatter.empty` (warning) | a scatter places nothing: no wall edge in its region, or no free ground of the kind it fills | move the region, or change *Where* |
 | `nouns.exist` | a camp's, prop's or scatter's noun isn't one of the game's models | pick one from the palette |
+
+**The rules** (Map > Rules... shows each at its field):
+
+| Rule | It fails when | What to do |
+|---|---|---|
+| `rules.victory` | a kill race outside 1-200 kills, a Binding race outside 1-12 Bindings or a time limit outside 3-90 minutes; a Binding race to more Bindings than each team has (3 a lane with `"auto"`), unless destroyed Bindings come back (`bindings.respawn`); a warning for a kill race under 5 kills (it ends in the first fights) | pick a target in range; 10-50 makes a good kill race |
+| `rules.start-level` | the starting level isn't 1-20 | a level in range |
+| `rules.respawn` | the base outside 0-120 s, or the growth a level or a minute outside 0-10 s | fix the value |
+| `rules.minions` | the first wave after 10 minutes, or a wave every less than 10 s or more than 300 s; a warning under 15 s (the waves crowd the lanes) | fix the value |
+| `rules.gold` | starting gold over 20,000, passive gold over 5,000 a minute, its start over an hour, or the kill gold factor over 10 | fix the value |
+| `rules.xp` | the XP speed outside 0.25-5 | fix the value |
+| `rules.bindings` | the Bindings back after less than 30 s or more than an hour; a warning when they are back before the next minion wave | fix the value |
+| `rules.wells` | the wells' opening or lock outside their ranges, or their gold factor over 10; a warning when they open after the time limit | fix the value |
+| `rules.surrender` | the surrender's unlock outside 5-60 minutes; a warning when the time limit comes first (the surrender then never unlocks by time) | fix the value, or turn surrender off |
+| `names.tuning` | a map with its own respawn, minion, gold, XP, Binding, well or surrender rules is named `Tuning` or `Tuning_MM_V3` (the game's own tuning) | rename the map |
 
 **The void:**
 

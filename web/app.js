@@ -551,6 +551,7 @@ function selectPath(str) {
   if (p[0] === 'base' && p.length >= 2 && isPt(getAt(S.doc, p))) return select({ t: 'obj', path: p });
   select(null);
   if (p[0] === 'void') ED.emit('focus-void', str); // the void window (void.js, Map > The Void) shows its field
+  if (p[0] === 'rules' || p[0] === 'tuning') ED.emit('focus-rules', str); // Map > Rules... (rules.js) shows its field
 }
 
 // ---- the view ---------------------------------------------------------------------------------------------
@@ -2188,6 +2189,7 @@ function mapInspector(el) {
     st ? h('dt', {}, 'paths') : null, st ? h('dd', { title: "How wide open ground must be for the graphs' squares: narrower ground is left out of them, and nobody walks it in game" }, graphWidths(st)) : null,
     h('dt', {}, 'check'), h('dd', {}, link($('checkState').textContent, () => ED.openWindow('check')))));
   el.append(h('p', { class: 'small', 'data-units-pointer': '' }, 'Camps, wells and ward spots: ', link('the Units tab', () => ED.act('map.addCamp')), '.'));
+  if (ED.rulesText) el.append(h('p', { class: 'small', 'data-rules-link': '' }, 'Rules: ', link(ED.rulesText(), () => ED.act('map.rules')), ' (Map > Rules...).'));
   const bs = S.report ? botsSummary() : null;
   if (bs && bs.text) el.append(h('p', { class: 'small' + (bs.uneven ? ' warn' : '') }, bs.text));
   el.append(h('p', { class: 'small' }, 'Map > ', link('Properties...', () => ED.act('map.properties')), ', ', link('Options...', () => ED.act('map.options')),
@@ -2210,11 +2212,12 @@ function renderMapWindows() {
   }));
   if (!wp.firstChild) {
     wp.append(h('div', { class: 'path' }, S.pkg + '/map.json'));
-    for (const [k, v] of Object.entries(d)) { // every top-level scalar, the unknown ones too
-      if (v === null || typeof v === 'object') continue;
+    for (const [k, v] of Object.entries(d)) { // every top-level scalar, the unknown ones too (tuning: Map > Rules...)
+      if (v === null || typeof v === 'object' || (k === 'tuning' && ED.actions['map.rules'])) continue;
       wp.append(field(k, () => d[k], x => { d[k] = x; }, typeof v === 'number' ? 'number' : 'text'));
     }
     wp.append(h('p', { class: 'small' }, 'name: the Level\'s and the folder\'s; display: the name the game shows (1-13 characters); tag: the custom game\'s ~#tag; prefix: its names\' prefix.'));
+    if (ED.actions['map.rules']) wp.append(h('p', { class: 'small' }, 'The game\'s pace it starts from and how a match is won: ', h('a', { class: 'lnk', onclick: () => ED.act('map.rules') }, 'Map > Rules...'), '.'));
   }
   if (!wo.firstChild) {
     if (d.terrain && typeof d.terrain === 'object') {
@@ -2528,16 +2531,44 @@ function newDialog(own) {
   sel.disabled = !!own;
   $('dlgNew').dataset.own = own ? '1' : '';
   $('dlgNew').querySelector('h2').textContent = own ? 'Save ' + S.pkg + ' as my own copy' : 'New map from a template';
+  newFieldErr('', '');
   $('dlgNew').showModal();
 }
-$('dlgNew').addEventListener('close', async () => {
-  if ($('dlgNew').returnValue !== 'ok') return;
+// New's refusal at its field (EDNEWNAME): the backend runs the compiler's names rules (name, display, tag, prefix,
+// against the maps folder's maps) before it writes anything, and its refusal names the field and says what to change
+// ("display "Brawl Grove v1": 14 characters, 1 to 13: shorten it by 1"); the dialog stays open. Another refusal
+// (a taken folder, a missing template) shows under the fields. Any edit clears it.
+const NEW_FIELDS = ['name', 'display', 'tag', 'prefix'];
+function newFieldErr(field, msg) {
+  const form = $('formNew'), at = NEW_FIELDS.includes(field) ? field : '';
+  for (const el of form.querySelectorAll('[data-err]')) {
+    const on = !!msg && el.dataset.err === at;
+    el.textContent = on ? msg : '';
+    el.classList.toggle('hidden', !on);
+  }
+  for (const k of NEW_FIELDS) form.elements[k].setAttribute('aria-invalid', String(!!msg && k === at));
+  if (msg && at) form.elements[at].focus();
+}
+for (const k of NEW_FIELDS) $('formNew').elements[k].addEventListener('input', () => newFieldErr('', ''));
+$('formNew').addEventListener('submit', e => {
+  if (!e.submitter || e.submitter.value !== 'ok') return; // Cancel closes the dialog
+  e.preventDefault(); // Create: closed only when the map is made
+  createNew();
+});
+async function createNew() {
   const own = $('dlgNew').dataset.own === '1' && S.doc && S.delivered;
   const f = new FormData($('formNew'));
   const [source, template] = own ? ['maps', S.pkg] : String($('newTemplate').value).split(/:(.*)/s);
   const q = { template, source, name: f.get('name'), display: f.get('display'), tag: f.get('tag'), prefix: f.get('prefix'), keepAdded: !!own };
-  const res = await api('POST', '/api/new', q);
-  if (!res.ok) { log('new: ' + res.error, 'err'); return; }
+  $('newOk').disabled = true;
+  let res;
+  try { res = await api('POST', '/api/new', q); } finally { $('newOk').disabled = false; }
+  if (!res.ok) {
+    newFieldErr(res.field || '', res.error || 'refused (' + res._status + ')');
+    log('new: ' + res.error, 'err');
+    return;
+  }
+  $('dlgNew').close('ok');
   log(`made ${res.pkg} from ${q.template}`, 'ok');
   if (own) {
     const copy = await api('GET', '/api/map/' + res.pkg);
@@ -2553,7 +2584,7 @@ $('dlgNew').addEventListener('close', async () => {
   }
   await loadState();
   await openMap(res.pkg);
-});
+}
 
 // ---- keys and buttons -------------------------------------------------------------------------------------
 
@@ -2972,6 +3003,75 @@ ED.selftests.bindings = async function selftestBindings() {
   while (S.undo.length > u0) undo();
   await settle();
   ok &= say(snapshot() === S.savedJSON, 'undone: ' + S.pkg + ' as saved');
+  say(ok, ok ? 'selftest passed' : 'selftest failed');
+  document.title = ok ? 'selftest passed' : 'selftest failed';
+  document.body.dataset.selftest = ok ? 'passed' : 'failed';
+};
+
+// newname (EDNEWNAME): New's refusals at their fields, nothing written. The backend runs the compiler's names rules
+// (mapc check --names) before it writes; MAPRULES8's script had made a display of 14 characters ("Brawl Grove" + " v1").
+// The values are set by script, which the fields' maxlength doesn't stop (as an old page or a paste could send them).
+// newname-save then makes CM_SelfNew with 13 characters ("Brawl Grove 1"): the dialog closes and the new map opens.
+ED.selftests.newname = ED.selftests['newname-save'] = async function selftestNewName(mode) {
+  const out = $('selftest'), lines = [];
+  out.classList.remove('hidden');
+  const say = (ok, msg) => { lines.push((ok ? 'PASS ' : 'FAIL ') + msg); out.textContent = lines.join('\n'); return !!ok; };
+  const dlg = $('dlgNew'), form = $('formNew');
+  const errAt = k => { const el = form.querySelector(`[data-err="${k}"]`); return el && !el.classList.contains('hidden') ? el.textContent : ''; };
+  const shown = () => [...form.querySelectorAll('[data-err]')].filter(el => !el.classList.contains('hidden')).map(el => el.dataset.err || '(form)');
+  const invalid = () => NEW_FIELDS.filter(k => form.elements[k].getAttribute('aria-invalid') === 'true');
+  const pkgs = () => ((S.config && S.config.maps) || []).map(m => m.pkg);
+  const before = (await api('GET', '/api/state')).maps.map(m => m.pkg).join();
+  const create = async values => {
+    for (const k of NEW_FIELDS) form.elements[k].value = values[k] !== undefined ? values[k] : '';
+    newFieldErr('', '');
+    $('newOk').click();
+    for (let i = 0; i < 200 && dlg.open && !shown().length; i++) await new Promise(r => setTimeout(r, 50));
+  };
+  let ok = true;
+  newDialog(false);
+  const tpl = [...$('newTemplate').options].find(o => o.value === 'maps:' + S.pkg);
+  if (tpl) $('newTemplate').value = tpl.value;
+  ok &= say(dlg.open && tpl && form.elements.display.maxLength === 13, `New from template ${S.pkg}: the dialog open, the display field takes 13 characters`);
+  const base = { name: 'CM_SelfNew', display: 'Brawl Grove v1', tag: 'selfnew', prefix: '[Self] ' };
+  // the display of 14 characters: at its field, with the rule's words, the length and what to change
+  await create(base);
+  ok &= say(dlg.open && shown().join() === 'display' && invalid().join() === 'display' && document.activeElement === form.elements.display &&
+    /"Brawl Grove v1": 14 characters, 1 to 13: shorten it by 1/.test(errAt('display')) && /names\.display/.test(errAt('display')),
+  'display "Brawl Grove v1" (14): refused at its field: ' + errAt('display'));
+  const st = await api('GET', '/api/map/CM_SelfNew');
+  ok &= say(st._status === 404, 'nothing written (GET /api/map/CM_SelfNew: ' + st._status + ')');
+  // an edit clears it
+  form.elements.display.value = 'Brawl Grove';
+  form.elements.display.dispatchEvent(new Event('input', { bubbles: true }));
+  ok &= say(!shown().length && !invalid().length, 'typing in the field clears the refusal');
+  // the other fields: a built-in tag, the template's tag kept, a long prefix, a shipped level's name
+  await create({ ...base, display: 'Brawl Grove', tag: 'sm' });
+  ok &= say(dlg.open && shown().join() === 'tag' && /built-in/.test(errAt('tag')), 'tag "sm": at its field: ' + errAt('tag'));
+  await create({ ...base, display: 'Brawl Grove', tag: '' });
+  ok &= say(dlg.open && shown().join() === 'tag' && /has the tag/.test(errAt('tag')), 'no tag (the template\'s kept): at the tag: ' + errAt('tag'));
+  await create({ ...base, display: 'Brawl Grove', prefix: '[A very long prefix] ' });
+  ok &= say(dlg.open && shown().join() === 'prefix' && /21 characters, at most 16: shorten it by 5/.test(errAt('prefix')), 'a prefix of 21: at its field: ' + errAt('prefix'));
+  await create({ ...base, name: 'SM_Map_v5', display: 'Brawl Grove' });
+  ok &= say(dlg.open && shown().join() === 'name' && /shipped/.test(errAt('name')), 'a shipped level\'s name: at its field: ' + errAt('name'));
+  // the open map's own folder: taken, at the name
+  await create({ ...base, name: S.pkg, display: 'Brawl Grove' });
+  ok &= say(dlg.open && shown().join() === 'name' && /exists already/.test(errAt('name')), `${S.pkg} again: at the name: ` + errAt('name'));
+  const after = (await api('GET', '/api/state')).maps.map(m => m.pkg).join();
+  ok &= say(after === before && !pkgs().includes('CM_SelfNew'), 'the maps folder unchanged: ' + after);
+  if (mode === 'newname-save') { // the boundary: 13 characters pass, the map is made and opened
+    await create({ ...base, display: 'Brawl Grove 1' });
+    for (let i = 0; i < 200 && S.pkg !== 'CM_SelfNew'; i++) await new Promise(r => setTimeout(r, 50));
+    ok &= say(!dlg.open && S.pkg === 'CM_SelfNew' && S.doc && S.doc.display === 'Brawl Grove 1' && pkgs().includes('CM_SelfNew'),
+      `display "Brawl Grove 1" (13): made and opened ${S.pkg} (${S.doc && S.doc.display})`);
+    await runCheck();
+    const names = ((S.report && S.report.findings) || []).filter(f => /^names\./.test(f.rule)).map(f => f.rule);
+    ok &= say(!names.length, 'its check has no names finding' + (names.length ? ': ' + names.join() : ''));
+  } else {
+    form.querySelector('button[value="cancel"]').click();
+    await new Promise(r => setTimeout(r, 50));
+    ok &= say(!dlg.open, 'Cancel closes the dialog');
+  }
   say(ok, ok ? 'selftest passed' : 'selftest failed');
   document.title = ok ? 'selftest passed' : 'selftest failed';
   document.body.dataset.selftest = ok ? 'passed' : 'failed';

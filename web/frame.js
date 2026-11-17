@@ -188,6 +188,7 @@ const FR = (() => {
     { id: 'map', label: 'Map', items: () => [
       { t: 'Properties...', note: 'name, display name, tag, prefix', off: () => !S.doc, act: act('map.properties') },
       { t: 'Options...', note: 'the ground everywhere else', off: () => !S.doc, act: act('map.options') },
+      { t: 'Rules...', note: 'how a match is won, presets, gold, respawn', off: () => !S.doc || !has('map.rules'), act: act('map.rules') },
       { t: 'The Void...', note: 'what lies past the ground', off: () => !has('map.void'), act: act('map.void') },
       { t: 'Ground Bake and Cliff...', note: 'texels, tiles, minimap, cliff material', off: () => !has('ground.bake'), act: act('ground.bake') },
       '-',
@@ -213,6 +214,8 @@ const FR = (() => {
       { t: 'Scatter Settings...', note: 'spacing, inset, at most, scale', off: () => !has('props.scatterSettings'), act: act('props.scatterSettings') },
       { t: 'Paste a Group from SM_Map_v5...', off: () => !has('props.paste') || !S.doc, act: act('props.paste') },
       { t: 'Split the Group into Doodads', off: () => !has('props.split'), act: act('props.split') },
+      '-',
+      { t: 'Gameplay Constants...', note: 'read only: the game\'s values and this map\'s', off: () => !S.doc || !has('map.constants'), act: act('map.constants') },
       '-',
       { t: 'Export Ground Pictures...', off: () => !has('ground.export'), act: act('ground.export') },
       { t: 'Import Ground Pictures...', off: () => !has('ground.import'), act: act('ground.import') },
@@ -712,7 +715,14 @@ const FR = (() => {
       b.append(h('h2', {}, 'Keys and Mouse'), h('div', { class: 'cols' }, col(KEYS.slice(0, 2)), col(KEYS.slice(2))));
     } else if (what === 'guide') {
       b.append(h('h2', {}, 'Making Maps'), h('p', {}, 'The map makers\' guide is docs\\making-maps.md in the editor\'s folder: what a map needs, map.json and the rules the check applies.'),
-        h('p', { class: 'small' }, 'The editor\'s own guide (the panes, the keys, Test) is README.md beside it.'));
+        h('p', { class: 'small' }, 'The editor\'s own guide (the panes, the keys, Test) is README.md beside it.'),
+        h('h3', {}, 'Map rules'),
+        h('p', {}, 'Map > Rules... sets how a match on your map is played: one click on a card (Brawl, Kill Race, Gold Rush, Siege...) or the plain fields: ' +
+          'how to win (the Guardian always; add a kill race, a Binding race, a time limit), the starting level, respawn, gold, minions, Bindings that come back, wells, surrender. ' +
+          'Players read the rules in the lobby and at the start of the match. A kill race, a Binding race or a time limit makes the game unrated. ' +
+          'Lobby setup (suggested) picks the rules a custom game on your map starts its lobby with (Standard, Draft or your own choices).'),
+        h('div', { class: 'trybox' }, h('button', { 'data-try-rules': '', onclick: () => { if (typeof RU !== 'undefined') RU.tryIt(); } }, 'Try it'),
+          ' a kill race of 3 shows the end quickly: it sets the rule (Undo takes it back) and starts Test.'));
     } else {
       const pg = (S.config && S.config.page) || {};
       b.append(h('h2', {}, 'About the Map Editor'), h('p', {}, 'Dawngate Map Editor ' + (pg.version || '') + (S.config && S.config.release ? ', served by Start-Client ' + S.config.release : '') + '.'),
@@ -913,7 +923,7 @@ const FR = (() => {
     }
     closeMenus();
     for (const a of ['ground.layers', 'ground.stamps', 'ground.bake', 'ground.export', 'ground.import', 'ground.flatten', 'ground.bakeOn', 'ground.mask', 'ground.raster', 'ground.hideDerived',
-      'props.paste', 'props.split', 'props.scatterSettings', 'props.newSeed', 'map.void', 'map.properties', 'map.options', 'view.frameSel']) {
+      'props.paste', 'props.split', 'props.scatterSettings', 'props.newSeed', 'map.void', 'map.properties', 'map.options', 'map.rules', 'map.constants', 'view.frameSel']) {
       if (!ED.actions[a]) ok &= say(false, 'no action ' + a);
     }
     ok &= say(true, 'the menus\' actions are all registered');
@@ -1160,7 +1170,7 @@ const FR = (() => {
     // the windows and the status bar's check
     $('st4').click();
     ok &= say(ED.isOpen('check') && $('findings').children.length > 0, 'the status bar\'s check opens Map Check');
-    for (const [a, w] of [['map.properties', 'props'], ['map.options', 'options'], ['map.void', 'void'], ['ground.bake', 'gbake'], ['ground.layers', 'glayers'], ['ground.stamps', 'gstamps']]) {
+    for (const [a, w] of [['map.properties', 'props'], ['map.options', 'options'], ['map.void', 'void'], ['map.rules', 'rules'], ['map.constants', 'constants'], ['ground.bake', 'gbake'], ['ground.layers', 'glayers'], ['ground.stamps', 'gstamps']]) {
       ED.act(a);
       ok &= say(ED.isOpen(w) && ED.windows[w].body.textContent.length > 10, `${a} opens the window ${ED.windows[w].title}`);
       ED.closeWindow(w);

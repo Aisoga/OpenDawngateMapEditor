@@ -245,6 +245,8 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 dialog label { display: block; margin: 6px 0; }
 dialog input, dialog select { width: 100%; }
 dialog menu { display: flex; justify-content: flex-end; gap: 6px; padding: 0; }
+#dlgNew .vf { font-size: 11px; padding: 2px 6px; margin: -2px 0 6px; border-left: 3px solid var(--err); background: #22262e; }
+#dlgNew input[aria-invalid="true"] { outline: 1px solid var(--err); }
 #dlgHelp { max-width: 900px; }
 #dlgHelp h2 { margin: 0 0 8px; font-size: 16px; }
 #dlgHelp table { border-collapse: collapse; font-size: 12px; }
